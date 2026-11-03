@@ -8,9 +8,12 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }} / ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
@@ -20,4 +23,9 @@ jobs:
       - name: Install package
         run: pip install -e .
       - name: Run tests
+        env:
+          # Fresh mcp venv handshake is the slow step; once per OS on 3.12.
+          TRAMMEL_FRESH_MCP_INSTALL: ${{ matrix.python-version == '3.12' && '1' || '0' }}
+          # SDK 1.30 pin is OS-independent; keep it on Ubuntu 3.12 only.
+          TRAMMEL_FRESH_MCP_V1: ${{ matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest' && '1' || '0' }}
         run: python -m unittest discover -v -s tests -p 'test_*.py'

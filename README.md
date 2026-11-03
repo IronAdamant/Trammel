@@ -27,7 +27,7 @@ Instead of letting your AI assistant wing it on complex changes, Trammel breaks 
 
 ```bash
 pip install trammel            # core library (no dependencies beyond Python stdlib)
-pip install trammel[mcp]       # with MCP server for Claude Code / Cursor
+pip install trammel[mcp]       # MCP server; allows MCP Python SDK 1.x and 2.x (`mcp>=1.0.0,<3`)
 ```
 
 Or from source:
@@ -153,17 +153,17 @@ test_cmd = ["pytest", "-x", "-q"]   # used by verify_step / plan_and_execute whe
 trammel/              Importable package
   __init__.py         Public API: plan_and_execute, explore, synthesize, export_*
   core.py             Planner: decomposition, constraints, step generation
-  store.py            RecipeStore: SQLite persistence (8 tables), telemetry
+  store.py            RecipeStore: SQLite persistence (15 tables), telemetry
   store_recipes.py    Recipe methods: save, retrieve, list, prune
   strategies.py       9 built-in beam strategies
   harness.py          Execution harness: temp copies, test runner
   export.py           Versioned plan/strategy JSON for external runners
   project_config.py   Config merging + resolve_test_cmd (pyproject / .trammel.json)
-  analyzer_specs.py   Declarative regex specs for 13 regex-based analyzers
+  analyzer_specs.py   Declarative regex specs (SPEC_REGISTRY: 12 entries)
   analyzer_engine.py  RegexAnalyzerEngine + import resolvers + backward-compat shims
   analyzers.py        Python + TypeScript analyzers, language detection
   cli.py              CLI entry point (--export, --test-cmd)
-  mcp_server.py       MCP tool schemas and dispatch (32 tools)
+  mcp_server.py       MCP tool schemas and dispatch (33 tools)
   mcp_stdio.py        MCP stdio server entry point
   plan_merge.py       Plan merging engine: conflict detection + 4 resolution strategies
   store_agents.py     Multi-agent coordination: step claiming, availability, proximity warnings
@@ -184,6 +184,12 @@ SYSTEM_PROMPT.md      Reference orchestration guide for LLM clients
 | `trajectories` | Run logs per beam: outcome, steps completed, failure reason |
 | `failure_patterns` | Historical failure signatures with resolution history |
 | `usage_events` | Telemetry: tool calls, recipe hit rates, strategy win rates |
+| `scaffold_recipes` | Reusable scaffold patterns with role counts and success/failure |
+| `scaffold_trigrams` | Trigram index for scaffold-recipe retrieval |
+| `recipe_terms` | Inverted word index for TF-IDF recipe lookup |
+| `recipe_signatures` | MinHash signatures for approximate recipe matching |
+| `recipe_arch_signatures` | MinHash signatures of architecture shape |
+| `recipe_index_meta` | Recipe-index bookkeeping |
 
 ## Contributing
 
@@ -193,7 +199,7 @@ Contributions welcome. Please open an issue first to discuss changes.
 2. Create a feature branch (`git checkout -b feature/your-feature`)
 3. Make your changes (core must remain stdlib-only; tests use `unittest` only)
 4. Run tests: `python -m unittest discover -q -s tests -p 'test_*.py'`
-   (CI also runs this on Python **3.10–3.13**; feature tests that need newer syntax should use `@unittest.skipUnless` / `skipIf`)
+   (CI also runs this on Python **3.10–3.13** on Ubuntu, macOS, and Windows; feature tests that need newer syntax should use `@unittest.skipUnless` / `skipIf`)
 5. Open a pull request
 
 ## Publishing (Maintainers)
@@ -209,6 +215,14 @@ Releases use **Trusted Publishing** (GitHub OIDC → PyPI). No API tokens needed
 
 <details>
 <summary><strong>Full Changelog</strong></summary>
+
+### v3.15.3 — MCP SDK 2.x startup, tool errors, version, doc counts
+
+- **MCP SDK 2.x.** `pip install trammel[mcp]` was resolving `mcp` 2.x, whose low-level `Server` no longer has `list_tools` / `call_tool` decorators, so `trammel-mcp` crashed on startup (`'Server' object has no attribute 'list_tools'`). The stdio server now registers tools with those decorators on SDK 1.x and with `on_list_tools` / `on_call_tool` on SDK 2.x. The extra is pinned to `mcp>=1.0.0,<3`.
+- **Tool errors.** Failed tool calls return MCP `isError: true` instead of a normal text result that clients treat as success.
+- **Server version.** `initialize` reports Trammel's own version in `serverInfo`, not the installed `mcp` package version.
+- **Docs counts.** Current layout and schema notes match the code: 33 MCP tools (12 primary), 15 SQLite tables, and 12 `SPEC_REGISTRY` entries.
+- No other public API changes.
 
 ### v3.15.2 — CI matrix green on Python 3.10–3.13
 

@@ -8,10 +8,22 @@
 
 ## Active context
 
-- **Version:** 3.15.2
-- **Focus:** CI green on 3.10–3.13 (PEP 695 test gating); prior 3.15.x primary MCP surface + analyzer strip-order fixes.
+- **Version:** 3.15.3
+- **Focus:** MCP SDK 2.x startup (`list_tools` removed), `isError` tool results, Trammel `serverInfo` version, doc-count parity. CI covers Ubuntu, macOS, and Windows.
 
 ## Session log
+
+---
+
+## v3.15.3 — MCP SDK 2.x compatibility
+
+**Date:** 2026-11-03
+
+- `trammel-mcp` registers tools via SDK 1.x decorators or SDK 2.x `on_list_tools` / `on_call_tool`. Optional dep is `mcp>=1.0.0,<3`.
+- Tool exceptions return `CallToolResult(isError=True)`. `Server(..., version=)` is Trammel's version.
+- Docs: 33 tools, 15 SQLite tables, 12 `SPEC_REGISTRY` entries. CI matrix adds macOS and Windows.
+- Fresh-venv handshake test (latest allowed mcp, plus mcp 1.30.0) covers `initialize` and `tools/list`.
+- PyPI via Trusted Publishing when a GitHub Release `v3.15.3` is published. Do not tag from this branch.
 
 ---
 
