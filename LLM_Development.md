@@ -8,10 +8,22 @@
 
 ## Active context
 
-- **Version:** 3.15.3
-- **Focus:** MCP SDK 2.x startup (`list_tools` removed), `isError` tool results, Trammel `serverInfo` version, doc-count parity. CI covers Ubuntu and macOS.
+- **Version:** Python 3.15.3 remains on this branch. Rust 4.0.0 is the rewrite in `src/`, not released.
+- **Focus:** Std-only Rust port. Do not tag, merge, or publish from the rewrite branch.
 
 ## Session log
+
+---
+
+## Rust 4.0 rewrite (draft, not released)
+
+**Date:** 2026-11-03
+
+- Cargo package `trammel` 4.0.0, empty `[dependencies]`. Parser core copied from stele-context `244561a` (pull/5) and checked by `scripts/syntax_core_manifest.txt`.
+- Native store `.trammel/store`. `trammel migrate` reads a SQLite db and WAL read-only.
+- 32 MCP tools: the 33 Python tools minus `record_step` and `create_plan`, plus `verify_plan`. Primary surface stays 12.
+- Parity: five archetypes match Python 3.15.3 on files, descriptions, symbols, relevance, rationale, fingerprint, and dependency edge sets. `test_farm` edge order differs where implicit edges share a confidence.
+- Benchmarks on the 4 vCPU rewrite VM are in README. Not tagged. Not published.
 
 ---
 

@@ -1,0 +1,23 @@
+{
+ "version": {
+  "median_ms": 0.76,
+  "min_ms": 0.51,
+  "max_ms": 1.07,
+  "python_median_ms": 78.1,
+  "beats_python": true
+ },
+ "help": {
+  "median_ms": 0.52,
+  "min_ms": 0.5,
+  "max_ms": 0.89,
+  "python_median_ms": 78.7,
+  "beats_python": true
+ },
+ "mcp-initialize": {
+  "median_ms": 0.68,
+  "min_ms": 0.49,
+  "max_ms": 0.81,
+  "python_median_ms": 306.6,
+  "beats_python": true
+ }
+}

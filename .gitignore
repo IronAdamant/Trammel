@@ -24,6 +24,12 @@ coverage.xml
 .mypy_cache/
 .ruff_cache/
 
+# Rust build
+/target
+
+# Native store
+.trammel/
+
 # SQLite databases (generated at runtime)
 *.db
 *.db-shm

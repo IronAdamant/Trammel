@@ -1,0 +1,12 @@
+{
+  "name": "io.github.ironadamant/trammel",
+  "description": "Dependency-aware planning, verification, and recipe memory for coding agents.",
+  "version": "4.0.0",
+  "packages": [
+    {
+      "registry_type": "npm",
+      "identifier": "trammel",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

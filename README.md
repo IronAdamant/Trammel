@@ -37,6 +37,28 @@ git clone https://github.com/IronAdamant/Trammel.git
 cd Trammel && pip install -e '.[mcp]'
 ```
 
+## Benchmarks
+
+Figures below were measured, not estimated. Two boxes are involved and they are not the same machine.
+
+Python 3.15.2 baseline, recorded 2026-11-04 on Linux 6.12.94 x86_64, 8 vCPU Intel Xeon, 15.6 GB RAM, Python 3.13.5, mcp 1.30.0. Medians from `bench/python_baseline.json` (7 runs, 10 for startup and `tools/list`).
+
+Rust 4.0.0, measured 2026-11-03 on the rewrite VM: Linux 6.12.94 x86_64, 4 vCPU Intel Xeon, 15.6 GB RAM, rustc 1.99.1, release build. Startup and MCP figures are medians of 10 runs from `scripts/bench_gate.py`. Decompose figures are medians of 7 runs of the same command on both binaries.
+
+| Command | Python | Rust on the 4 vCPU VM |
+|---|---:|---:|
+| `trammel --version` | 78.1 ms, 25.3 MB RSS | 0.76 ms (min 0.51, max 1.07) |
+| `trammel --help` | 78.7 ms, 25.3 MB RSS | 0.52 ms (min 0.50, max 0.89) |
+| MCP spawn to `initialize` | 306.6 ms primary, 308.8 ms all | 0.68 ms (min 0.49, max 0.81) |
+| MCP `tools/list` primary | 1.8 ms, 12,508 bytes, 12 tools | 3,341 bytes, 12 tools |
+| MCP `tools/list` all | 2.1 ms, 23,515 bytes, 33 tools | 8,778 bytes, 32 tools |
+| MCP server memory | 55.7 MB after `tools/list`, 66.6 MB after the full flow | 3.3 MB VmHWM after `tools/list` |
+| `decompose` of this repo's `trammel/` package, both binaries, 7 runs | 185.8 ms (min 168.5, max 192.2) | 66.8 ms (min 65.8, max 68.3) |
+
+Release binary size on this x86_64 Linux build: `trammel` 2,015,664 bytes, `trammel-mcp` 1,938,912 bytes.
+
+rich 13.9.4 and flask 3.1.0 were not in this checkout, so the recorded 425.6 ms rich decompose and the 449-test verify were not re-run. The CI floor in `scripts/bench_gate.py` fails a build whose `--version`, `--help`, or MCP `initialize` median is at or above the recorded Python median. The regression rule itself (A/A passes, an injected slowdown fails, no percentage tolerance) is `cargo test --lib benchstat`.
+
 ## Quick Start
 
 ### With Claude Code or Cursor (MCP)

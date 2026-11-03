@@ -1,0 +1,7 @@
+{
+ "title": "get_recipe",
+ "schema_version": "4.0.0",
+ "type": "object",
+ "additionalProperties": true,
+ "description": "JSON result of trammel get_recipe"
+}

@@ -1,0 +1,7 @@
+{
+ "title": "merge_plans",
+ "schema_version": "4.0.0",
+ "type": "object",
+ "additionalProperties": true,
+ "description": "JSON result of trammel merge_plans"
+}

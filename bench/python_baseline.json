@@ -1,0 +1,437 @@
+{
+ "info": {
+  "python": "3.13.5",
+  "platform": "Linux-6.12.94+-x86_64-with-glibc2.41",
+  "cpu_count": 8,
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "mem_gb": 15.6,
+  "trammel": "trammel 3.15.2",
+  "mcp_pkg": "1.30.0",
+  "py_files": {
+   "rich": 190,
+   "flask": 83,
+   "trammel-src": 113
+  },
+  "runs": 7,
+  "started": "2026-11-04 08:49:25 AEDT",
+  "finished": "2026-11-04 08:50:30 AEDT"
+ },
+ "results": [
+  {
+   "name": "cli --version (startup)",
+   "kind": "cli",
+   "runs": 10,
+   "median_ms": 78.1,
+   "min_ms": 75.4,
+   "max_ms": 85.7,
+   "stdev_ms": 3.0,
+   "peak_rss_mb": 25.3,
+   "out_bytes": 15,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "cli --help",
+   "kind": "cli",
+   "runs": 7,
+   "median_ms": 78.7,
+   "min_ms": 76.7,
+   "max_ms": 81.2,
+   "stdev_ms": 1.6,
+   "peak_rss_mb": 25.3,
+   "out_bytes": 1174,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "cli dry-run rich (decompose + 3 beams)",
+   "kind": "cli",
+   "runs": 7,
+   "median_ms": 469.9,
+   "min_ms": 460.1,
+   "max_ms": 493.8,
+   "stdev_ms": 11.4,
+   "peak_rss_mb": 35.3,
+   "out_bytes": 88014,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "cli dry-run flask",
+   "kind": "cli",
+   "runs": 7,
+   "median_ms": 253.7,
+   "min_ms": 238.9,
+   "max_ms": 268.8,
+   "stdev_ms": 11.3,
+   "peak_rss_mb": 33.1,
+   "out_bytes": 92478,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "cli dry-run trammel-src",
+   "kind": "cli",
+   "runs": 7,
+   "median_ms": 332.4,
+   "min_ms": 321.9,
+   "max_ms": 349.1,
+   "stdev_ms": 11.2,
+   "peak_rss_mb": 37.9,
+   "out_bytes": 118797,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "cli plan_and_execute flask (no-op test cmd)",
+   "kind": "cli",
+   "runs": 3,
+   "median_ms": 321.1,
+   "min_ms": 305.0,
+   "max_ms": 325.2,
+   "stdev_ms": 10.7,
+   "peak_rss_mb": 33.2,
+   "out_bytes": 40044,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp[primary] spawn to initialize reply",
+   "kind": "mcp",
+   "runs": 10,
+   "median_ms": 306.6,
+   "min_ms": 298.5,
+   "max_ms": 320.4,
+   "stdev_ms": 6.4,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 182,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp[primary] tools/list",
+   "kind": "mcp",
+   "runs": 10,
+   "median_ms": 1.8,
+   "min_ms": 1.3,
+   "max_ms": 2.3,
+   "stdev_ms": 0.3,
+   "peak_rss_mb": 55.7,
+   "out_bytes": 12508,
+   "rc": [
+    0
+   ],
+   "tools": 12
+  },
+  {
+   "name": "mcp[all] spawn to initialize reply",
+   "kind": "mcp",
+   "runs": 10,
+   "median_ms": 308.8,
+   "min_ms": 300.3,
+   "max_ms": 377.8,
+   "stdev_ms": 22.6,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 182,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp[all] tools/list",
+   "kind": "mcp",
+   "runs": 10,
+   "median_ms": 2.1,
+   "min_ms": 1.8,
+   "max_ms": 2.7,
+   "stdev_ms": 0.3,
+   "peak_rss_mb": 55.9,
+   "out_bytes": 23515,
+   "rc": [
+    0
+   ],
+   "tools": 33
+  },
+  {
+   "name": "mcp tools/call status (empty db)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 18.8,
+   "min_ms": 12.7,
+   "max_ms": 110.1,
+   "stdev_ms": 35.0,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 2782,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call estimate rich",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 4.5,
+   "min_ms": 3.7,
+   "max_ms": 9.8,
+   "stdev_ms": 2.1,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 108,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call decompose rich (default)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 425.6,
+   "min_ms": 416.3,
+   "max_ms": 556.4,
+   "stdev_ms": 53.5,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 12529,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call decompose rich summary_only",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 400.0,
+   "min_ms": 392.5,
+   "max_ms": 568.6,
+   "stdev_ms": 69.4,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 2667,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call decompose flask (default)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 171.3,
+   "min_ms": 166.9,
+   "max_ms": 200.1,
+   "stdev_ms": 12.2,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 13556,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call explore rich (3 beams)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 427.7,
+   "min_ms": 409.6,
+   "max_ms": 508.1,
+   "stdev_ms": 39.1,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 88118,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call start_plan rich",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 417.5,
+   "min_ms": 408.9,
+   "max_ms": 455.3,
+   "stdev_ms": 19.6,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 13558,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call get_plan",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 5.9,
+   "min_ms": 3.8,
+   "max_ms": 6.7,
+   "stdev_ms": 1.1,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 22047,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call resume",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 6.4,
+   "min_ms": 4.6,
+   "max_ms": 10.8,
+   "stdev_ms": 2.1,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 30139,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call verify_step rich (import check)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 183.3,
+   "min_ms": 141.3,
+   "max_ms": 211.6,
+   "stdev_ms": 28.5,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 11215,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call verify_step trammel-src (449 real tests)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 3179.7,
+   "min_ms": 3052.4,
+   "max_ms": 5820.5,
+   "stdev_ms": 1247.0,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 9346,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call record_steps (1 step)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 7.6,
+   "min_ms": 4.7,
+   "max_ms": 9.8,
+   "stdev_ms": 1.7,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 38,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call add_constraint",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 6.4,
+   "min_ms": 5.2,
+   "max_ms": 9.5,
+   "stdev_ms": 1.5,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 24,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call get_constraints",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 3.9,
+   "min_ms": 2.3,
+   "max_ms": 8.8,
+   "stdev_ms": 2.0,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 227,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call export_plan",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 4.2,
+   "min_ms": 3.4,
+   "max_ms": 6.1,
+   "stdev_ms": 1.1,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 19304,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call complete_plan (saves recipe)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 10.7,
+   "min_ms": 6.8,
+   "max_ms": 39.8,
+   "stdev_ms": 11.4,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 121,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call get_recipe (hit)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 7.9,
+   "min_ms": 4.7,
+   "max_ms": 8.9,
+   "stdev_ms": 1.7,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 13693,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call list_plans",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 5.2,
+   "min_ms": 3.7,
+   "max_ms": 7.3,
+   "stdev_ms": 1.3,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 222,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp tools/call status (after flow)",
+   "kind": "mcp",
+   "runs": 7,
+   "median_ms": 4.3,
+   "min_ms": 2.8,
+   "max_ms": 11.4,
+   "stdev_ms": 3.4,
+   "peak_rss_mb": 0.0,
+   "out_bytes": 2782,
+   "rc": [
+    0
+   ]
+  },
+  {
+   "name": "mcp server peak RSS after full flow (VmHWM)",
+   "kind": "mcp",
+   "runs": 7,
+   "peak_rss_mb": 66.6,
+   "min_mb": 66.4,
+   "max_mb": 66.9
+  }
+ ]
+}

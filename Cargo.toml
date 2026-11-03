@@ -1,0 +1,18 @@
+[package]
+name = "trammel"
+version = "4.0.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-aware planning, verification, and recipe memory for coding agents. std-only."
+publish = false
+readme = "README.md"
+
+[dependencies]
+
+[[bin]]
+name = "trammel"
+path = "src/main.rs"
+
+[[bin]]
+name = "trammel-mcp"
+path = "src/bin/trammel_mcp.rs"
