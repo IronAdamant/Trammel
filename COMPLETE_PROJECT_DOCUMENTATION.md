@@ -1,8 +1,8 @@
 # Trammel — Project documentation index
 
-**Updated:** 2026-04-29
-**Version:** 3.12.1
-**Purpose:** Stdlib-only planning harness: dependency-aware decomposition (15 languages: Python, TypeScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig), parallel beam execution (9 strategies), typed symbol analysis, incremental verification, failure constraint propagation, structural recipe matching (with abbreviation expansion, stable content-addressed sig), recipe pruning, SQLite recipe/plan/step/constraint/trajectory persistence, **implicit dependency inference** (naming conventions, shared state, pattern learning). MCP server (31 tools) for LLM integration with reference system prompt. PEP 561 typed (`py.typed` marker). **v3.12.1** fixes the Python 3.14 SQLite transaction-nesting bug, hardens `get_plan` against corrupt strategy_json, makes `explore` scope-aware, deduplicates `recipe_files`, and adds `prune_plans`. **v3.12.0** split every module under 500 LOC (14 new modules, same public API) and externalized naming/role patterns to `data/patterns.json`.
+**Updated:** 2026-11-03
+**Version:** 3.15.3
+**Purpose:** Stdlib-only planning harness: dependency-aware decomposition (15 languages: Python, TypeScript, JavaScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig), parallel beam execution (9 strategies), typed symbol analysis, incremental verification, failure constraint propagation, structural recipe matching (with abbreviation expansion, stable content-addressed sig), recipe pruning, SQLite persistence (15 tables), **implicit dependency inference** (naming conventions, shared state, pattern learning). MCP server (33 tools, 12 primary by default) for LLM integration with reference system prompt. Regex specs live in `SPEC_REGISTRY` (12 entries). PEP 561 typed (`py.typed` marker). **v3.12.1** fixes the Python 3.14 SQLite transaction-nesting bug, hardens `get_plan` against corrupt strategy_json, makes `explore` scope-aware, deduplicates `recipe_files`, and adds `prune_plans`. **v3.12.0** split every module under 500 LOC (14 new modules, same public API) and externalized naming/role patterns to `data/patterns.json`.
 
 ## Root files
 
@@ -11,14 +11,14 @@
 | `README.md` | Overview, quickstart, CLI, MCP setup, architecture, version notes |
 | `COMPLETE_PROJECT_DOCUMENTATION.md` | This file: inventory and data flows |
 | `LLM_Development.md` | Chronological change log |
-| `pyproject.toml` | Package metadata (`trammel` 3.12.1), `requires-python >=3.10`, `mcp` optional dep, console scripts `trammel` + `trammel-mcp`. Package data now includes `data/*.json`. |
+| `pyproject.toml` | Package metadata (`trammel` 3.15.3), `requires-python >=3.10`, optional `mcp>=1.0.0,<3`, console scripts `trammel` + `trammel-mcp`. Package data now includes `data/*.json`. |
 | `SYSTEM_PROMPT.md` | Reference orchestration guide for LLM clients: plan-verify-store loop |
 
 ## `.github/workflows/`
 
 | Path | Purpose |
 |------|---------|
-| `ci.yml` | Tests on push/PR to `main` (Python 3.10–3.13). |
+| `ci.yml` | Tests on push/PR to `main` (Python 3.10–3.13 on Ubuntu and macOS). Python 3.12 also runs a fresh-venv MCP handshake. |
 | `publish.yml` | On **publish**ed GitHub Release: build sdist/wheel, `unittest`, upload to PyPI via **OIDC Trusted Publishing** (`environment: release`; no PyPI token in secrets). |
 
 ## wiki-local/
@@ -87,9 +87,9 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 
 | Path | Purpose | Main deps |
 |------|---------|-----------|
-| `trammel/mcp_server.py` | Dispatch layer: `dispatch_tool(store, tool_name, arguments)` plus one `_handle_*` per MCP tool (31 handlers, each with a 1-line docstring). **3.12.1** added `_handle_prune_plans` and made `_handle_get_recipe` return `near_match_recipes` on misses for parity with `explore`. Re-exports `_TOOL_SCHEMAS` / `_LANGUAGES` / `_TOOL_CATEGORIES` for backward compatibility. `_validate_registries()` asserts schema↔dispatch and language↔analyzer parity at import. ~415 LOC. | `tool_schemas`, `core`, `harness`, `store` |
-| `trammel/tool_schemas.py` | **New in 3.12.0.** JSON Schema definitions for all 31 MCP tools (added `prune_plans` in 3.12.1, category `coordination`), plus `TOOL_CATEGORIES` (planning / execution / memory / coordination / telemetry) and `coerce_int_params()` (schema-driven string→int coercion for MCP clients that serialize ints as strings). Split from `mcp_server.py` to keep both under 500 LOC. ~365 LOC. | stdlib |
-| `trammel/mcp_stdio.py` | MCP stdio server entry point (`trammel-mcp` console script). Per-call `RecipeStore` inside `asyncio.to_thread` worker — avoids cross-thread SQLite connection sharing (Python 3.14 enforces `check_same_thread`). Logger configured at module level; `KeyboardInterrupt` graceful shutdown. | `mcp_server`, `store`, `mcp` (optional) |
+| `trammel/mcp_server.py` | Dispatch layer: `dispatch_tool(store, tool_name, arguments)` plus one `_handle_*` per MCP tool (33 handlers). **3.12.1** added `_handle_prune_plans` and made `_handle_get_recipe` return `near_match_recipes` on misses for parity with `explore`. Later tools include `export_plan` and `start_plan`. Re-exports `_TOOL_SCHEMAS` / `_LANGUAGES` / `_TOOL_CATEGORIES` for backward compatibility. `_validate_registries()` asserts schema↔dispatch and language↔analyzer parity at import. ~415 LOC. | `tool_schemas`, `core`, `harness`, `store` |
+| `trammel/tool_schemas.py` | **New in 3.12.0.** JSON Schema definitions for all 33 MCP tools, plus `TOOL_CATEGORIES` (planning / execution / memory / coordination / telemetry), `PRIMARY_TOOLS` (12 names advertised by default), and `coerce_int_params()` (schema-driven string→int coercion for MCP clients that serialize ints as strings). Split from `mcp_server.py` to keep both under 500 LOC. ~365 LOC. | stdlib |
+| `trammel/mcp_stdio.py` | MCP stdio server entry point (`trammel-mcp` console script). Speaks MCP Python SDK 1.x (decorator registration) and 2.x (`on_list_tools` / `on_call_tool`). Reports Trammel's version. Tool failures return `isError: true`. Per-call `RecipeStore` inside `asyncio.to_thread` worker — avoids cross-thread SQLite connection sharing (Python 3.14 enforces `check_same_thread`). Logger configured at module level; `KeyboardInterrupt` graceful shutdown. | `mcp_server`, `store`, `mcp` (optional) |
 
 ### Language analyzers
 
@@ -97,9 +97,9 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 |------|---------|-----------|
 | `trammel/analyzers.py` | `LanguageAnalyzer` protocol, `PythonAnalyzer` (AST-based with shared `_iter_ast` generator), `TypeScriptAnalyzer` / `JavaScriptAnalyzer` (regex-based, tsconfig alias + workspace packages resolution, `.mts`/`.mjs` extensions, comment stripping), `get_analyzer()` registry (15 languages). Re-exports `detect_language` from `language_detection`. ~420 LOC. | `language_detection`, `analyzer_engine`, `utils` |
 | `trammel/language_detection.py` | **New in 3.12.0.** `detect_language(project_root)` with priority order: (1) explicit `.trammel.json`, (2) unambiguous config files (`Cargo.toml`, `go.mod`, `pyproject.toml` with `[project]`, etc.), (3) source-extension counting. Extracted from `analyzers.py`. ~126 LOC. | `analyzer_engine`, `utils` |
-| `trammel/analyzer_engine.py` | `RegexAnalyzerEngine` backed by `AnalyzerSpec`. Generic `collect_symbols`, `collect_typed_symbols`, `analyze_imports`, `pick_test_cmd`, `error_patterns`, plus `_IMPORT_RESOLVERS` dispatch table. One-liner-documented class shims for 11 languages (`GoAnalyzer`, `RustAnalyzer`, `CppAnalyzer`, `JavaAnalyzer`, `CSharpAnalyzer`, `RubyAnalyzer`, `PhpAnalyzer`, `SwiftAnalyzer`, `DartAnalyzer`, `ZigAnalyzer`). ~195 LOC (down from 588). | `analyzer_resolvers`, `analyzer_specs`, `utils` |
+| `trammel/analyzer_engine.py` | `RegexAnalyzerEngine` backed by `AnalyzerSpec`. Generic `collect_symbols`, `collect_typed_symbols`, `analyze_imports`, `pick_test_cmd`, `error_patterns`, plus `_IMPORT_RESOLVERS` dispatch table. Class shims for 10 languages (`GoAnalyzer`, `RustAnalyzer`, `CppAnalyzer`, `JavaAnalyzer`, `CSharpAnalyzer`, `RubyAnalyzer`, `PhpAnalyzer`, `SwiftAnalyzer`, `DartAnalyzer`, `ZigAnalyzer`). C and Kotlin reuse the C++ and Java specs. ~195 LOC (down from 588). | `analyzer_resolvers`, `analyzer_specs`, `utils` |
 | `trammel/analyzer_resolvers.py` | **New in 3.12.0.** Per-language import-graph resolvers extracted from `analyzer_engine.py`: `_resolve_go_imports` (via `go.mod`), `_resolve_rust_imports` (workspace + crate via `Cargo.toml`), `_resolve_cpp_imports` (via include graph), `_resolve_java_imports` + `_detect_java_source_roots` (Maven/Gradle source detection), `_resolve_csharp_imports`, `_resolve_ruby_imports`, `_resolve_php_imports`, `_resolve_swift_imports` (+ `_build_swift_module_map`), `_resolve_dart_imports`, `_resolve_zig_imports`. ~448 LOC. | `analyzer_specs`, `utils` |
-| `trammel/analyzer_specs.py` | Declarative regex specs for 13 regex-based analyzers. Each spec bundles `symbol_patterns`, `typed_patterns`, `strip_comments` key, `test_cmd`, `error_patterns`, and an optional `ImportSpec` with strategy name + regex patterns. ~423 LOC. | stdlib |
+| `trammel/analyzer_specs.py` | Declarative regex specs (`SPEC_REGISTRY`: 12 entries — Go, Rust, C, C++, Java, Kotlin, C#, Ruby, PHP, Swift, Dart, Zig; C shares the C++ spec and Kotlin shares the Java spec). Each spec bundles `symbol_patterns`, `typed_patterns`, `strip_comments` key, `test_cmd`, `error_patterns`, and an optional `ImportSpec` with strategy name + regex patterns. The 10 engine classes plus the TypeScript and JavaScript analyzers are the 12 regex analyzer classes; Python is AST-based. ~423 LOC. | stdlib |
 | `trammel/analyzers_ext.py` | Backward-compatibility shim — re-exports `CppAnalyzer`, `GoAnalyzer`, `JavaAnalyzer`, `RustAnalyzer` from `analyzer_engine.py`. | `analyzer_engine` |
 | `trammel/analyzers_ext2.py` | Backward-compatibility shim — re-exports `CSharpAnalyzer`, `DartAnalyzer`, `PhpAnalyzer`, `RubyAnalyzer`, `SwiftAnalyzer`, `ZigAnalyzer` from `analyzer_engine.py`. | `analyzer_engine` |
 
@@ -144,7 +144,7 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 4. `ExecutionHarness.run` copies tree, applies content edits, runs language-appropriate test command. `prepare_base(project_root)` creates one filtered base copy; `run_from_base(edits, base_dir)` copies from it (avoids re-filtering per beam). Beams execute in parallel via `ProcessPoolExecutor` (falls back to sequential). `verify_step` does single-step verification. `run_incremental` verifies step-by-step, aborting on first failure with structured `failure_analysis` (accepts language-specific `error_patterns`).
 5. Success → `save_recipe` (strategy + constraints + normalized trigram index + file paths in `recipe_files`); failure → `add_constraint` (type, description, context). `prune_recipes` removes stale low-quality recipes (cascade deletes). All mutations wrapped in `BEGIN IMMEDIATE` transactions with BUSY retry. Plans/steps/trajectories logged in SQLite.
 
-## Schema (trammel.db)
+## Schema (`trammel.db`, 15 tables)
 
 | Table | Key columns |
 |-------|-------------|
@@ -152,14 +152,21 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 | `recipe_trigrams` | trigram, recipe_sig (FK) — indexed on trigram for fast candidate lookup (legacy; retained for transition) |
 | `recipe_terms` | term, recipe_sig, count — inverted word index for TF-IDF recipe lookup |
 | `recipe_signatures` | recipe_sig (PK), signature — MinHash LSH signature for deduplication / ANN |
+| `recipe_arch_signatures` | recipe_sig (PK), signature — MinHash of architecture shape |
+| `recipe_index_meta` | key (PK), value — recipe-index bookkeeping |
 | `recipe_files` | file_path, recipe_sig (FK) — indexed on both columns for structural matching (Jaccard overlap) |
+| `scaffold_recipes` | sig (PK), pattern, scaffold, domain keywords, role counts, successes, failures |
+| `scaffold_trigrams` | trigram, scaffold_sig (FK) — scaffold-recipe retrieval |
 | `plans` | id (PK), goal, strategy, status, current_step, total_steps, created, updated |
 | `steps` | id (PK), plan_id (FK), step_index, description, rationale, depends_on, status, edits_json, verification, constraints_found, claimed_by, claimed_at, created |
 | `constraints` | id (PK), plan_id (FK), step_id (FK), constraint_type, description, context, active |
 | `trajectories` | id (PK), plan_id (FK), beam_id, strategy_variant, steps_completed, outcome, failure_reason |
+| `failure_patterns` | file_path, error_type, error_message, occurrences, resolution, first/last seen |
+| `usage_events` | event_type, detail, value, created — tool calls, recipe hits, strategy outcomes |
 
 ## Changelog (high level)
 
+- **3.15.3:** MCP Python SDK 2.x startup fix (`on_list_tools` / `on_call_tool`, dependency `mcp>=1.0.0,<3`), tool results use `isError: true` on failure, `serverInfo.version` is Trammel's version, and current docs match the code (33 tools, 15 tables, 12 `SPEC_REGISTRY` entries). CI runs on Ubuntu and macOS. See `CHANGELOG.md`.
 - **3.12.0:** Module-scale refactor to hold the 500-LOC-per-file discipline. Every module now under 500 LOC (was 9 files over, worst at 1223). Splits: `store_recipes.py` (1223 → 373) into `store_recipes` + `recipe_fingerprints` + `store_retrieval` + `store_scaffolds`; `store.py` into itself + `store_plans` + `store_telemetry`; `mcp_server.py` into itself + `tool_schemas`; `implicit_deps.py` into itself + `implicit_deps_engines` + `pattern_learner`; `analyzer_engine.py` into itself + `analyzer_resolvers`; `utils.py` into itself + `text_similarity` + `scaffold_validation`; `analyzers.py` into itself + `language_detection`; `scaffold_logic.py` into itself + `scaffold_creation`; `core.py` into itself + `planner_helpers`. All public APIs unchanged via re-exports. Naming-convention rules and file/goal role regex tables externalized to `trammel/data/patterns.json` (loaded via `pattern_config.py`). `pyproject.toml` version bumped to 3.12.0 (3.11.3 was drift — README already documented features shipped at that number); package data now ships `data/*.json`. Docstrings added to Planner/ExecutionHarness/RecipeStore public APIs and every MCP `_handle_*`. New `tests/test_mcp_dispatch.py` (11 tests) covering schema↔dispatch parity, int coercion, and previously-uncovered handlers. README "Verifies as it goes" clarified (harness runs tests; MCP `verify_step` is static/heuristic). `SYSTEM_PROMPT.md` gains explicit `decompose` vs `explore` vs `create_plan` decision block. 406 tests passing.
 - **3.11.3:** Robustness for test-heavy projects, `explore` fallback, and strategy trajectory data (see README for details). Shipped in the repo without a version bump; the 3.12.0 refactor closed the drift.
 - **3.11.0:** Core modularization + recipe word index + analyzer farm collapse. Extracted `core.py` monolith into `scoring.py`, `scaffold_logic.py`, `goal_nlp.py`, `constraints.py`, `scaffold_templates.py` (orchestrator now ~570 LOC). Added `recipe_index.py` with zero-dep inverted word index (TF-IDF) and MinHash LSH for deduplication / approximate nearest neighbors; schema expanded with `recipe_terms` and `recipe_signatures` tables; integrated into `store_recipes.py` while keeping legacy trigram tables for transition safety. Collapsed 15 regex analyzers into declarative `analyzer_specs.py` + single `RegexAnalyzerEngine` in `analyzer_engine.py`; `analyzers_ext.py` and `analyzers_ext2.py` are now backward-compat shims. 358 tests passing.

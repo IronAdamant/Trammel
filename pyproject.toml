@@ -1,6 +1,6 @@
 [project]
 name = "trammel"
-version = "3.15.2"
+version = "3.15.3"
 description = "Dependency-aware planning, incremental verification, and recipe memory for LLM-assisted coding (stdlib-only core)."
 readme = "README.md"
 license = "MIT"
@@ -38,7 +38,8 @@ Repository = "https://github.com/IronAdamant/Trammel"
 Issues = "https://github.com/IronAdamant/Trammel/issues"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0.0"]
+# SDK 1.x decorators and 2.x on_* handlers. 3.x is outside this range.
+mcp = ["mcp>=1.0.0,<3"]
 
 [project.scripts]
 trammel = "trammel.cli:main"
