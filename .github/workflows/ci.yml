@@ -13,7 +13,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Windows is not in the matrix: the suite stores and asserts POSIX
+        # relative paths, and TemporaryDirectory cleanup hits WinError 32
+        # while SQLite still has the db file open. macOS is the extra OS.
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5

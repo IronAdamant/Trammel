@@ -199,7 +199,7 @@ Contributions welcome. Please open an issue first to discuss changes.
 2. Create a feature branch (`git checkout -b feature/your-feature`)
 3. Make your changes (core must remain stdlib-only; tests use `unittest` only)
 4. Run tests: `python -m unittest discover -q -s tests -p 'test_*.py'`
-   (CI also runs this on Python **3.10–3.13** on Ubuntu, macOS, and Windows; feature tests that need newer syntax should use `@unittest.skipUnless` / `skipIf`)
+   (CI also runs this on Python **3.10–3.13** on Ubuntu and macOS; feature tests that need newer syntax should use `@unittest.skipUnless` / `skipIf`)
 5. Open a pull request
 
 ## Publishing (Maintainers)
