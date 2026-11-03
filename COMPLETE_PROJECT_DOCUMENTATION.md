@@ -225,13 +225,15 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 |------|---------|
 | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Package 4.0.0, toolchain 1.99.1, lockfile names only `trammel` |
 | `src/main.rs`, `src/bin/trammel_mcp.rs`, `src/cli.rs`, `src/mcp.rs`, `src/tools.rs` | Both binaries, JSON CLI, stdio MCP |
-| `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/{json,kind}.rs` | Vendored stele parser core |
+| `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/{json,kind}.rs` | Vendored stele parser core. `python_symbols` builds a newline index once so line numbers match the prefix scan without repeating it per identifier |
 | `src/lang/{code,symbols,imports,analyze,blank}.rs` | Hand-written extractors for the 15 languages |
 | `src/planner.rs`, `src/score.rs`, `src/goal.rs`, `src/strategies.rs`, `src/implicit.rs` | Decomposition |
 | `src/store.rs`, `src/migrate.rs` | Snapshot store and read-only SQLite import |
 | `src/harness.rs`, `src/export.rs`, `src/doctor.rs`, `src/benchstat.rs` | Verify, plan export, doctor, regression rule |
-| `scripts/parity_check.py`, `scripts/bench_gate.py` | Parity against Python 3.15.3 and the Python time floors |
-| `bench/python_baseline.json`, `bench/rust_measured.json` | Recorded Python medians and the Rust startup sample |
+| `scripts/parity_check.py`, `scripts/bench_gate.py`, `scripts/same_runner_bench.py` | Parity against Python 3.15.3, the recorded time floors, and a same-machine Python-vs-Rust run |
+| `bench/python_baseline.json`, `bench/rust_measured.json`, `bench/same_runner.json` | Recorded Python medians, the Rust startup sample, and the same-machine comparison |
+| `.github/workflows/release.yml` | On a `v*` tag only: six binaries, `SHA256SUMS`, GitHub Release, then npm if `NPM_TOKEN` is set. Not run from a pull request. |
+| `npm/trammel`, `npm/trammel-*` | npm launcher and six platform packages. Binaries are inserted by the release job. |
 | `schemas/*.schema.json` | One schema file per tool plus the envelope |
 | `AGENTS.md`, `docs/LLM_CONTRACT.md`, `llms.txt` | Agent guide and JSON contract |
 | `install.sh`, `install.ps1`, `server.json` | Install stubs and registry document; nothing is published |

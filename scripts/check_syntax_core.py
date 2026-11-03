@@ -2,8 +2,9 @@
 """Check the vendored parser files against scripts/syntax_core_manifest.txt.
 
 The manifest is the byte digest of the stele-context parser core copied from
-commit 244561a491ac4002b2c4bc94a3884091870a6d11 (pull/5). A second mode,
-`--against DIR`, diffs those paths against a stele checkout.
+commit 244561a491ac4002b2c4bc94a3884091870a6d11 (pull/5), plus the newline
+index in `src/lang/python_symbols/`. A second mode, `--against DIR`, diffs
+those paths against a stele checkout and will report the two symbol files.
 """
 import hashlib
 import sys
@@ -19,7 +20,8 @@ for line in manifest:
     if not file.is_file():
         bad.append(f"missing {path}")
         continue
-    got = hashlib.sha256(file.read_bytes()).hexdigest()
+    # Windows checkouts may rewrite LF as CRLF. The manifest is the LF digest.
+    got = hashlib.sha256(file.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     if got != digest:
         bad.append(f"changed {path}")
 if bad:

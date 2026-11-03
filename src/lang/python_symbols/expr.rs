@@ -273,11 +273,9 @@ impl Cursor<'_> {
     }
 
     pub(super) fn line_at(&self, start: u32) -> u32 {
-        self.source[..start as usize]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count() as u32
-            + 1
+        // Same count as scanning the prefix for `\n`, via the index built once
+        // in `extract`. The prefix scan was quadratic in file size.
+        self.newlines.partition_point(|offset| *offset < start) as u32 + 1
     }
 
     pub(super) fn ident_text(&self) -> Option<String> {

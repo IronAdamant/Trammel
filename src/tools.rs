@@ -129,18 +129,15 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             ]))
         }
         "status" => {
-            let counts = store.map(|s| s.counts()).unwrap_or_else(|| crate::canon::obj(vec![]));
-            let value = contract::ok(vec![
-                ("store", Value::string(store_path.display().to_string())),
-                ("counts", counts),
-                ("primary_tools", Value::Array(PRIMARY.iter().copied().map(Value::string).collect())),
-                ("tool_count", Value::Int(all_names().len() as i64)),
-                ("primary_tool_count", Value::Int(PRIMARY.len() as i64)),
-            ]);
-            let _ = value;
+            // Use the store `call` already holds. Opening it again deadlocks:
+            // a second `flock` in this process waits on the first.
+            let counts = match store {
+                Some(open) => open.counts(),
+                None => crate::canon::obj(vec![]),
+            };
             Ok(crate::canon::obj(vec![
                 ("store", Value::string(store_path.display().to_string())),
-                ("counts", store_counts(store_path)),
+                ("counts", counts),
                 ("primary_tools", Value::Array(PRIMARY.iter().copied().map(Value::string).collect())),
                 ("advanced_tools", Value::Array(all_names().into_iter().filter(|n| !PRIMARY.contains(n)).map(Value::string).collect())),
                 ("tool_surface_default", Value::string("primary")),
@@ -235,7 +232,11 @@ fn verify_step(args: &Value, fallback: &Path) -> Value {
     let edits = edits_of(args);
     let cfg = config::load(&root);
     let language = crate::canon::get(args, "language").and_then(crate::canon::as_str).map(|s| s.to_string()).unwrap_or_else(|| analyze::detect(&root, &cfg));
-    let test_cmd = crate::canon::get(args, "test_cmd").and_then(crate::canon::as_array).map(|items| items.iter().filter_map(crate::canon::as_str).map(|s| s.to_string()).collect()).unwrap_or_else(|| config::resolve_test_cmd(None, &cfg, analyze::test_cmd(&language, &root)));
+    let test_cmd = match crate::canon::get(args, "test_cmd") {
+        Some(Value::Array(items)) => items.iter().filter_map(crate::canon::as_str).map(|s| s.to_string()).collect(),
+        Some(Value::String(text)) => config::split_cmd(text),
+        _ => config::resolve_test_cmd(None, &cfg, analyze::test_cmd(&language, &root)),
+    };
     let full = crate::canon::get(args, "full_output").and_then(crate::canon::as_bool).unwrap_or(false);
     harness::verify(&VerifyRequest { edits, root, test_cmd, timeout: Duration::from_secs(60), full_output: full, cap: harness::default_cap() })
 }
@@ -310,10 +311,6 @@ fn usage(store: &Store) -> Result<Value, Failure> {
     Ok(crate::canon::obj(vec![("enabled", Value::Bool(true)), ("events", Value::Int(n as i64))]))
 }
 
-fn store_counts(path: &Path) -> Value {
-    Store::open_shared(path).map(|s| s.counts()).unwrap_or_else(|_| crate::canon::obj(vec![]))
-}
-
 fn edits_of(args: &Value) -> Vec<(String, String)> {
     crate::canon::get(args, "edits").and_then(crate::canon::as_array).map(|items| {
         items.iter().filter_map(|item| {
@@ -338,6 +335,42 @@ fn required_i64(args: &Value, key: &str) -> Result<i64, Failure> {
 
 fn arg_path(args: &Value, key: &str) -> Option<PathBuf> {
     crate::canon::get(args, key).and_then(crate::canon::as_str).map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_surface_is_32_tools_including_verify_plan() {
+        let names = all_names();
+        assert_eq!(names.len(), 32, "{names:?}");
+        assert!(names.contains(&"verify_plan"));
+        assert!(!names.contains(&"record_step"));
+        assert!(!names.contains(&"create_plan"));
+        assert_eq!(PRIMARY.len(), 12);
+        assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn status_returns_without_relocking_the_store() {
+        let dir = std::env::temp_dir().join(format!("trammel-status-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = dir.join("state");
+        let args = crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string()))]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = call("status", &args, &dir, Some(&store), false);
+            let _ = tx.send(result.is_ok());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(true) => {}
+            Ok(false) => panic!("status failed"),
+            Err(_) => panic!("status deadlocked on the store lock"),
+        }
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("trammel-status-lock-{}", std::process::id())));
+    }
 }
 
 pub fn surface(name: &str) -> &'static str {

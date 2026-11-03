@@ -25,30 +25,61 @@ pub fn imports(language: &str, root: &Path) -> BTreeMap<String, Vec<String>> {
     }
 }
 
-fn python_imports(root: &Path) -> BTreeMap<String, Vec<String>> {
-    let files = collect_files(root, &[".py"]);
+pub(crate) fn python_module_index(files: &[String]) -> (BTreeMap<String, String>, BTreeSet<String>) {
     let mut modules = BTreeMap::new();
-    for rel in &files {
+    for rel in files {
         let mut module = rel.trim_end_matches(".py").replace('/', ".");
         if let Some(stripped) = module.strip_suffix(".__init__") {
             module = stripped.to_string();
         }
         modules.insert(module, rel.clone());
     }
-    let module_set: BTreeSet<String> = modules.keys().cloned().collect();
-    let mut graph = BTreeMap::new();
-    for rel in &files {
-        let Some(source) = read_lossy(&root.join(rel)) else { continue };
-        let mut deps = BTreeSet::new();
-        for name in python_import_names(&source) {
-            resolve_py(&name, &module_set, &modules, &mut deps);
-        }
-        deps.remove(rel);
-        if !deps.is_empty() {
-            graph.insert(rel.clone(), deps.into_iter().collect());
-        }
+    let module_set = modules.keys().cloned().collect();
+    (modules, module_set)
+}
+
+pub(crate) fn python_file_deps(source: &str, rel: &str, module_set: &BTreeSet<String>, modules: &BTreeMap<String, String>) -> BTreeSet<String> {
+    let mut deps = BTreeSet::new();
+    for name in python_import_names(source) {
+        resolve_py(&name, module_set, modules, &mut deps);
     }
-    graph
+    deps.remove(rel);
+    deps
+}
+
+fn python_imports(root: &Path) -> BTreeMap<String, Vec<String>> {
+    let files = collect_files(root, &[".py"]);
+    let (modules, module_set) = python_module_index(&files);
+    let mut found = Vec::new();
+    let workers = worker_count(files.len());
+    std::thread::scope(|scope| {
+        let mut joins = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let files = &files;
+            let modules = &modules;
+            let module_set = &module_set;
+            joins.push(scope.spawn(move || {
+                let mut local = Vec::new();
+                for (index, rel) in files.iter().enumerate() {
+                    if index % workers != worker { continue; }
+                    let Some(source) = read_lossy(&root.join(rel)) else { continue };
+                    let deps = python_file_deps(&source, rel, module_set, modules);
+                    if !deps.is_empty() { local.push((rel.clone(), deps)); }
+                }
+                local
+            }));
+        }
+        for join in joins {
+            if let Ok(local) = join.join() { found.extend(local); }
+        }
+    });
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found.into_iter().map(|(rel, deps)| (rel, deps.into_iter().collect())).collect()
+}
+
+fn worker_count(files: usize) -> usize {
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    cpus.clamp(1, files.max(1))
 }
 
 fn python_import_names(source: &str) -> Vec<String> {

@@ -289,3 +289,54 @@ pub fn graph_map(value: &Value) -> BTreeMap<String, Vec<String>> {
 pub fn analysis_language(root: &Path) -> String {
     analyze::detect(root, &config::load(root))
 }
+
+/// Decompose, fan out beams, and run the test command once per beam.
+/// This is the CLI path that matches Python `plan_and_execute`.
+pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: Option<&[String]>) -> Result<Value, String> {
+    let strategy = decompose(request)?;
+    let steps = canon::get(&strategy, "steps").and_then(canon::as_array).unwrap_or(&[]).to_vec();
+    let graph = graph_from(Some(&graph_value_from_strategy(&strategy)));
+    let beams = strategies::explore(&steps, &graph, request.num_beams.max(1), &BTreeMap::new());
+    if let Some(dir) = store_dir {
+        let mut store = crate::store::Store::open(dir)?;
+        let id = store.create_plan(&request.goal, &strategy);
+        store.update_plan_status(id, "running");
+        store.save()?;
+    }
+    let cmd = test_cmd.map(|c| c.to_vec()).filter(|c| !c.is_empty()).unwrap_or_else(|| {
+        analyze::test_cmd(request.language.as_deref().unwrap_or("python"), &request.root)
+    });
+    let mut outcomes = Vec::with_capacity(beams.len());
+    std::thread::scope(|scope| {
+        let mut joins = Vec::new();
+        for _ in &beams {
+            let root = request.root.clone();
+            let cmd = cmd.clone();
+            joins.push(scope.spawn(move || {
+                crate::harness::verify(&crate::harness::VerifyRequest {
+                    edits: Vec::new(),
+                    root,
+                    test_cmd: cmd,
+                    timeout: std::time::Duration::from_secs(60),
+                    full_output: false,
+                    cap: crate::harness::default_cap(),
+                })
+            }));
+        }
+        for join in joins {
+            outcomes.push(join.join().unwrap_or_else(|_| Value::string("beam thread failed")));
+        }
+    });
+    let success = outcomes.iter().all(|item| canon::get(item, "success").and_then(canon::as_bool).unwrap_or(false));
+    Ok(canon::obj(vec![
+        ("goal", Value::string(request.goal.clone())),
+        ("strategy", strategy),
+        ("beams", Value::Int(beams.len() as i64)),
+        ("success", Value::Bool(success)),
+        ("outcomes", Value::Array(outcomes)),
+    ]))
+}
+
+fn graph_value_from_strategy(strategy: &Value) -> Value {
+    canon::get(strategy, "dependency_graph").cloned().unwrap_or(Value::Object(vec![]))
+}

@@ -6,7 +6,7 @@ use crate::lang::python_symbols::extract;
 use crate::lang::{imports, symbols};
 use crate::syntax::query::SymbolHit;
 use crate::walk::{collect_files, is_ignored_dir, read_lossy};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -107,25 +107,17 @@ pub struct Analysis {
 }
 
 pub fn analyze(root: &Path, language: &str) -> Analysis {
+    if language == "python" {
+        let (symbols, typed, imports) = python_project(root);
+        return Analysis { language: language.to_string(), symbols, typed, imports };
+    }
     let mut symbols = BTreeMap::new();
     let mut typed = BTreeMap::new();
-    if language == "python" {
-        for rel in collect_files(root, &[".py"]) {
-            let Some(source) = read_lossy(&root.join(&rel)) else { continue };
-            let hits = extract(&source);
-            let names = python_names(&hits);
-            if !names.is_empty() {
-                typed.insert(rel.clone(), names.iter().map(|(n, k)| (n.clone(), (*k).to_string())).collect());
-                symbols.insert(rel, names.into_iter().map(|(n, _)| n).collect());
-            }
-        }
-    } else {
-        for file in crate::walk::walk_sources(root, extensions(language)) {
-            let found = symbols::collect(language, &file.source);
-            if found.is_empty() { continue; }
-            symbols.insert(file.rel.clone(), found.iter().map(|(n, _)| n.clone()).collect());
-            typed.insert(file.rel, found.into_iter().map(|(n, k)| (n, k.to_string())).collect());
-        }
+    for file in crate::walk::walk_sources(root, extensions(language)) {
+        let found = symbols::collect(language, &file.source);
+        if found.is_empty() { continue; }
+        symbols.insert(file.rel.clone(), found.iter().map(|(n, _)| n.clone()).collect());
+        typed.insert(file.rel, found.into_iter().map(|(n, k)| (n, k.to_string())).collect());
     }
     Analysis {
         language: language.to_string(),
@@ -133,6 +125,63 @@ pub fn analyze(root: &Path, language: &str) -> Analysis {
         typed,
         imports: imports::imports(language, root),
     }
+}
+
+/// One read per file, then symbols and imports on a worker pool. Results are
+/// merged by path, so the maps match a serial walk.
+fn python_project(root: &Path) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, Vec<(String, String)>>, BTreeMap<String, Vec<String>>) {
+    let files = collect_files(root, &[".py"]);
+    let (modules, module_set) = imports::python_module_index(&files);
+    // Largest sources first so one heavy module cannot sit behind another
+    // on the same worker. Merge is by path, so this does not change output.
+    let mut loaded: Vec<(usize, String, String)> = files.iter().filter_map(|rel| {
+        let source = read_lossy(&root.join(rel))?;
+        Some((source.len(), rel.clone(), source))
+    }).collect();
+    loaded.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, loaded.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut parts: Vec<Vec<(String, Vec<(String, &'static str)>, BTreeSet<String>)>> = Vec::new();
+    std::thread::scope(|scope| {
+        let mut joins = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let loaded = &loaded;
+            let modules = &modules;
+            let module_set = &module_set;
+            let next = &next;
+            joins.push(scope.spawn(move || {
+                let mut local = Vec::new();
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= loaded.len() { break; }
+                    let (_, rel, source) = &loaded[index];
+                    let names = python_names(&extract(source));
+                    let deps = imports::python_file_deps(source, rel, module_set, modules);
+                    if names.is_empty() && deps.is_empty() { continue; }
+                    local.push((rel.clone(), names, deps));
+                }
+                local
+            }));
+        }
+        for join in joins {
+            if let Ok(local) = join.join() { parts.push(local); }
+        }
+    });
+    let mut symbols = BTreeMap::new();
+    let mut typed = BTreeMap::new();
+    let mut graph = BTreeMap::new();
+    for local in parts {
+        for (rel, names, deps) in local {
+            if !names.is_empty() {
+                typed.insert(rel.clone(), names.iter().map(|(n, k)| (n.clone(), (*k).to_string())).collect());
+                symbols.insert(rel.clone(), names.into_iter().map(|(n, _)| n).collect());
+            }
+            if !deps.is_empty() {
+                graph.insert(rel, deps.into_iter().collect());
+            }
+        }
+    }
+    (symbols, typed, graph)
 }
 
 fn python_names(hits: &[SymbolHit]) -> Vec<(String, &'static str)> {

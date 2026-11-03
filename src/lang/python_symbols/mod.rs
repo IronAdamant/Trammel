@@ -16,6 +16,12 @@ pub fn extract(source: &str) -> Vec<SymbolHit> {
     if !brackets_balanced(&tokens, source) {
         return regex_fallback(source);
     }
+    let mut newlines = Vec::new();
+    for (offset, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            newlines.push(offset as u32);
+        }
+    }
     let mut cursor = Cursor {
         source,
         tokens: &tokens,
@@ -23,6 +29,7 @@ pub fn extract(source: &str) -> Vec<SymbolHit> {
         symbols: Vec::new(),
         scope: Vec::new(),
         pending: Vec::new(),
+        newlines,
     };
     cursor.module();
     cursor.symbols
@@ -55,6 +62,7 @@ struct Cursor<'a> {
     symbols: Vec<SymbolHit>,
     scope: Vec<String>,
     pending: Vec<SymbolHit>,
+    newlines: Vec<u32>,
 }
 
 impl<'a> Cursor<'a> {

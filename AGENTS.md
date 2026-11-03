@@ -18,7 +18,7 @@ python scripts/check_syntax_core.py
 
 ## Module map
 
-- `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/json.rs`, `src/lang/kind.rs` — stele-context parser core, commit `244561a491ac4002b2c4bc94a3884091870a6d11`. Do not edit these. `scripts/syntax_core_manifest.txt` is their digest.
+- `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/json.rs`, `src/lang/kind.rs` — stele-context parser core, commit `244561a491ac4002b2c4bc94a3884091870a6d11`. `scripts/syntax_core_manifest.txt` is their digest. The only local change is a newline index in `python_symbols` so line numbers stay identical without scanning the file prefix per identifier. `check_syntax_core.py --against` a stele checkout reports those two files.
 - `src/lang/code.rs` — lossless lexer for the other languages.
 - `src/lang/symbols.rs`, `src/lang/imports.rs` — hand-written extractors.
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs` — decompose and the nine beams.
@@ -35,7 +35,17 @@ python scripts/check_syntax_core.py
 
 ## MCP
 
-Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. Keep the current revision and the two previous. `record_step` and `create_plan` return `tool_removed`. New tools need a `schemas/<name>.schema.json` file and a row in `src/tools.rs`.
+The Rust server advertises **32 tools**. That is the Python 33 minus `record_step` and `create_plan`, plus `verify_plan`. The primary surface is still the same 12. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. Removed names return `tool_removed`. New tools need a `schemas/<name>.schema.json` file and a row in `src/tools.rs`.
+
+## Tied implicit edges
+
+Rust sorts implicit edges by confidence, highest first. Equal confidences keep discovery order from sorted maps. Python uses set iteration, so its order changes with `PYTHONHASHSEED` and the OS. The edge set matches. `tests/determinism.rs` checks that `tests/archetypes/test_farm` decomposes to the same bytes on every OS (`tests/goldens/test_farm_decompose.json`, timings removed). `scripts/parity_check.py` checks that test_farm matches Python on files, descriptions, symbols, relevance, rationale, and fingerprint, and that a second Rust run repeats the edge list.
+
+## Distribution
+
+`.github/workflows/release.yml` runs only on a `v*` tag. It builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS` to a GitHub Release, and only then publishes npm. The npm job reads the repository secret `NPM_TOKEN` (an npm automation token with publish rights). The workflow does not print the token. Do not create the secret's value in the repo, and do not push a tag from this branch.
+
+`npm/trammel` is a launcher. The six `npm/trammel-*` packages are optionalDependencies; the release job copies the matching binary in before `npm publish`. The Rust crate stays at zero dependencies.
 
 ## Zero dependencies
 

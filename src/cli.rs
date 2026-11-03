@@ -75,9 +75,16 @@ fn run_goal(goal: &str, args: &[String], cwd: &std::path::Path, store: Option<&s
     if let Some(scope) = flag_value(args, "--scope") { fields.push(("scope".into(), Value::string(scope))); }
     if let Some(language) = flag_value(args, "--language") { fields.push(("language".into(), Value::string(language))); }
     if let Some(beams) = flag_value(args, "--beams") { fields.push(("num_beams".into(), Value::Int(beams.parse().unwrap_or(3)))); }
+    if let Some(test_cmd) = flag_words(args, "--test-cmd") {
+        fields.push(("test_cmd".into(), Value::Array(test_cmd.into_iter().map(Value::String).collect())));
+    }
     let dry = args.iter().any(|a| a == "--dry-run");
-    let tool = if dry { "explore" } else { "start_plan" };
-    let result = tools::call(tool, &Value::Object(fields), cwd, store, false)?;
+    let tool = if dry { "explore" } else { "run" };
+    let result = if dry {
+        tools::call(tool, &Value::Object(fields), cwd, store, false)?
+    } else {
+        crate::planner::plan_and_execute(&fields_request(&fields), store, flag_words(args, "--test-cmd").as_deref()).map_err(|e| Failure::new("run", e, "Check the test command"))?
+    };
     if let Some(path) = flag_value(args, "--export") {
         std::fs::write(path, crate::canon::stable_pretty(&result)).map_err(|e| Failure::new("export", e.to_string(), ""))?;
     }
@@ -142,6 +149,35 @@ fn human_flag(args: &[String]) -> bool { args.iter().any(|a| a == "--human") }
 
 fn flag_value(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+fn flag_words(args: &[String], name: &str) -> Option<Vec<String>> {
+    let start = args.iter().position(|a| a == name)? + 1;
+    let mut words = Vec::new();
+    for arg in &args[start..] {
+        if arg.starts_with('-') { break; }
+        words.push(arg.clone());
+    }
+    if words.is_empty() { None } else { Some(words) }
+}
+
+fn fields_request(fields: &[(String, Value)]) -> crate::planner::Request {
+    let mut goal = String::new();
+    let mut root = std::path::PathBuf::from(".");
+    let mut request = crate::planner::Request::new("", "");
+    for (key, value) in fields {
+        match key.as_str() {
+            "goal" => goal = crate::canon::as_str(value).unwrap_or("").to_string(),
+            "project_root" => root = std::path::PathBuf::from(crate::canon::as_str(value).unwrap_or(".")),
+            "scope" => request.scope = crate::canon::as_str(value).map(|s| s.to_string()),
+            "language" => request.language = crate::canon::as_str(value).map(|s| s.to_string()),
+            "num_beams" => request.num_beams = crate::canon::as_i64(value).unwrap_or(3) as usize,
+            _ => {}
+        }
+    }
+    request.goal = goal;
+    request.root = root;
+    request
 }
 
 fn positional_goal(args: &[String]) -> Option<String> {

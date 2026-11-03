@@ -39,25 +39,46 @@ cd Trammel && pip install -e '.[mcp]'
 
 ## Benchmarks
 
-Figures below were measured, not estimated. Two boxes are involved and they are not the same machine.
+Figures below were measured, not estimated. Rust is faster on every row than both the recorded baseline and a same-machine rerun of Python 3.15.3.
 
-Python 3.15.2 baseline, recorded 2026-11-04 on Linux 6.12.94 x86_64, 8 vCPU Intel Xeon, 15.6 GB RAM, Python 3.13.5, mcp 1.30.0. Medians from `bench/python_baseline.json` (7 runs, 10 for startup and `tools/list`).
+The recorded column is `bench/python_baseline.json`: Trammel 3.15.2, Python 3.13.5, mcp 1.30.0, Linux 6.12.94 x86_64, 8 vCPU Intel Xeon, 15.6 GB, 2026-11-04. That box is not the one that produced the other two columns.
 
-Rust 4.0.0, measured 2026-11-03 on the rewrite VM: Linux 6.12.94 x86_64, 4 vCPU Intel Xeon, 15.6 GB RAM, rustc 1.99.1, release build. Startup and MCP figures are medians of 10 runs from `scripts/bench_gate.py`. Decompose figures are medians of 7 runs of the same command on both binaries.
+The same-runner columns are `bench/same_runner.json`, measured 2026-11-03 on Linux 6.12.94 x86_64, 4 vCPU Intel Xeon, 15.6 GB, rustc 1.99.1, Python 3.12.3, Trammel 3.15.3, mcp 2.3.0. rich is the 13.9.4 git tag (190 `.py` files). flask is the 3.1.0 sdist (83 `.py` files). Startup and cold MCP rows are 10 runs. The flask full run is 3. Every other row is 7. Values are medians in milliseconds.
 
-| Command | Python | Rust on the 4 vCPU VM |
-|---|---:|---:|
-| `trammel --version` | 78.1 ms, 25.3 MB RSS | 0.76 ms (min 0.51, max 1.07) |
-| `trammel --help` | 78.7 ms, 25.3 MB RSS | 0.52 ms (min 0.50, max 0.89) |
-| MCP spawn to `initialize` | 306.6 ms primary, 308.8 ms all | 0.68 ms (min 0.49, max 0.81) |
-| MCP `tools/list` primary | 1.8 ms, 12,508 bytes, 12 tools | 3,341 bytes, 12 tools |
-| MCP `tools/list` all | 2.1 ms, 23,515 bytes, 33 tools | 8,778 bytes, 32 tools |
-| MCP server memory | 55.7 MB after `tools/list`, 66.6 MB after the full flow | 3.3 MB VmHWM after `tools/list` |
-| `decompose` of this repo's `trammel/` package, both binaries, 7 runs | 185.8 ms (min 168.5, max 192.2) | 66.8 ms (min 65.8, max 68.3) |
+| Benchmark | Recorded Python | Same-runner Python | Same-runner Rust |
+|---|---:|---:|---:|
+| CLI `--version` | 78.1 | 87.19 | 0.70 |
+| CLI `--help` | 78.7 | 91.88 | 0.71 |
+| CLI dry-run rich | 469.9 | 97.86 | 19.89 |
+| CLI dry-run flask | 253.7 | 318.88 | 10.41 |
+| CLI dry-run trammel-src | 332.4 | 109.34 | 11.87 |
+| CLI full flask, test command `true` | 321.1 | 356.13 | 28.44 |
+| MCP primary `initialize` | 306.6 | 568.73 | 0.94 |
+| MCP primary `tools/list` | 1.8 | 1.72 | 0.10 |
+| MCP all `initialize` | 308.8 | 559.88 | 0.94 |
+| MCP all `tools/list` | 2.1 | 2.00 | 0.32 |
+| MCP status, empty store | 18.8 | 12.74 | 0.16 |
+| MCP estimate rich | 4.5 | 4.16 | 1.01 |
+| MCP decompose rich | 425.6 | 550.84 | 20.85 |
+| MCP decompose rich, summary only | 400.0 | 566.02 | 19.76 |
+| MCP decompose flask | 171.3 | 211.98 | 8.81 |
+| MCP explore rich, 3 beams | 427.7 | 538.33 | 20.29 |
+| MCP start_plan rich | 417.5 | 566.15 | 20.60 |
+| MCP get_plan | 5.9 | 3.61 | 0.54 |
+| MCP resume | 6.4 | 3.46 | 0.49 |
+| MCP verify_step, rich import | 183.3 | 172.86 | 135.34 |
+| MCP verify_step, Trammel unit tests | 3179.7 | 3417.21 | 2767.64 |
+| MCP record_steps | 7.6 | 5.65 | 1.65 |
+| MCP add_constraint | 6.4 | 2.69 | 0.94 |
+| MCP get_constraints | 3.9 | 2.96 | 0.24 |
+| MCP export_plan | 4.2 | 2.92 | 0.58 |
+| MCP complete_plan | 10.7 | 5.82 | 1.14 |
+| MCP get_recipe | 7.9 | 4.37 | 0.53 |
+| MCP list_plans | 5.2 | 2.76 | 0.34 |
+| MCP status after the flow | 4.3 | 2.44 | 0.26 |
+| MCP VmHWM after the flow (MB) | 66.6 | 75.30 | 8.09 |
 
-Release binary size on this x86_64 Linux build: `trammel` 2,015,664 bytes, `trammel-mcp` 1,938,912 bytes.
-
-rich 13.9.4 and flask 3.1.0 were not in this checkout, so the recorded 425.6 ms rich decompose and the 449-test verify were not re-run. The CI floor in `scripts/bench_gate.py` fails a build whose `--version`, `--help`, or MCP `initialize` median is at or above the recorded Python median. The regression rule itself (A/A passes, an injected slowdown fails, no percentage tolerance) is `cargo test --lib benchstat`.
+`tools/list` payload, one measurement of the JSON line: Python primary 12,508 bytes and 12 tools, Python all 23,515 bytes and 33 tools, Rust primary 3,340 bytes and 12 tools, Rust all 8,777 bytes and 32 tools. This x86_64 release build is `trammel` 2,131,840 bytes and `trammel-mcp` 2,032,264 bytes. The CI floor in `scripts/bench_gate.py` fails a build whose `--version`, `--help`, or MCP `initialize` median is at or above the recorded Python median. The regression rule (an A/A run passes, an injected slowdown fails, no percentage tolerance) is `cargo test --lib benchstat`.
 
 ## Quick Start
 
