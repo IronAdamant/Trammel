@@ -7,6 +7,7 @@ Std-only planning binary for coding agents. Version 4.0.0. JSON on stdout.
 - `trammel start_plan --goal "..." --project-root .`
 - `trammel verify_step --project-root . --edits '[...]'`
 - `trammel mcp` — stdio MCP, protocols 2026-07-28, 2025-11-25, 2025-06-18
+- Install the binaries with `npm i -g trammel-mcp` or `npx trammel-mcp`. The commands are `trammel` and `trammel-mcp`.
 
 Contract: docs/LLM_CONTRACT.md
 Guide: AGENTS.md

@@ -24,7 +24,7 @@
 - 32 MCP tools: the 33 Python tools minus `record_step` and `create_plan`, plus `verify_plan`. Primary surface stays 12.
 - Parity: five archetypes match Python 3.15.3 on files, descriptions, symbols, relevance, rationale, fingerprint, and dependency edge sets. `test_farm` edge order differs where implicit edges share a confidence. The same input is byte-identical across two Rust runs (`tests/goldens/test_farm_decompose.json`). Four processes claim one store in `tests/four_claims.rs`.
 - Same-runner medians are in `bench/same_runner.json` and the README table. Rust is ahead of Python 3.15.3 on every row, and ahead of the recorded 8 vCPU baseline as well. Not tagged. Not published.
-- Release path, when a person pushes tag `v4.0.0`: `.github/workflows/release.yml` builds six binaries, publishes the GitHub Release with `SHA256SUMS` using `github.token`, then publishes npm. The npm job needs repository secret `NPM_TOKEN`.
+- Release path, when a person pushes tag `v4.0.0`: `.github/workflows/release.yml` builds six binaries, publishes the GitHub Release with `SHA256SUMS` using `github.token`, then publishes npm. The wrapper package is `trammel-mcp` (`npm i -g trammel-mcp`, `npx trammel-mcp`); the registry name `trammel` is taken. Commands stay `trammel` and `trammel-mcp`. The npm job needs repository secret `NPM_TOKEN`.
 
 ---
 

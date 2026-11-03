@@ -30,6 +30,13 @@ pip install trammel            # core library (no dependencies beyond Python std
 pip install trammel[mcp]       # MCP server; allows MCP Python SDK 1.x and 2.x (`mcp>=1.0.0,<3`)
 ```
 
+Rust 4.0.0 is the npm package `trammel-mcp`. A global install puts the commands `trammel` and `trammel-mcp` on `PATH`.
+
+```bash
+npm i -g trammel-mcp
+npx trammel-mcp
+```
+
 Or from source:
 
 ```bash

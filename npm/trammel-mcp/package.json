@@ -1,5 +1,5 @@
 {
-  "name": "trammel",
+  "name": "trammel-mcp",
   "version": "4.0.0",
   "description": "Launcher for the Trammel planning binary. The Rust build has no npm dependencies.",
   "bin": {

@@ -105,7 +105,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
             --title "$tag" \
-            --notes "Trammel ${tag}. Verify SHA256SUMS before installing. npm publish follows this job and needs the NPM_TOKEN repository secret."
+            --notes "Trammel ${tag}. Verify SHA256SUMS before installing. npm publish of trammel-mcp and the six trammel-<os>-<arch> packages follows this job and needs the NPM_TOKEN repository secret."
 
   npm:
     name: npm registry
@@ -138,5 +138,5 @@ jobs:
             npm pkg set version="${version}" --prefix "${pkg}"
             npm publish "${pkg}" --access public
           done
-          npm pkg set version="${version}" --prefix npm/trammel
-          npm publish npm/trammel --access public
+          npm pkg set version="${version}" --prefix npm/trammel-mcp
+          npm publish npm/trammel-mcp --access public
