@@ -1,0 +1,19 @@
+{
+  "name": "trammel",
+  "version": "4.0.0",
+  "description": "Launcher for the Trammel planning binary. The Rust build has no npm dependencies.",
+  "bin": {
+    "trammel": "bin/trammel.js",
+    "trammel-mcp": "bin/trammel-mcp.js"
+  },
+  "files": ["bin"],
+  "optionalDependencies": {
+    "trammel-linux-x64": "4.0.0",
+    "trammel-linux-arm64": "4.0.0",
+    "trammel-darwin-x64": "4.0.0",
+    "trammel-darwin-arm64": "4.0.0",
+    "trammel-windows-x64": "4.0.0",
+    "trammel-windows-arm64": "4.0.0"
+  },
+  "engines": { "node": ">=18" }
+}

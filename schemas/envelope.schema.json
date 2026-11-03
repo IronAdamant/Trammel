@@ -1,0 +1,12 @@
+{
+ "schema_version": "4.0.0",
+ "ok": {
+  "type": "boolean"
+ },
+ "error": {
+  "code": "string",
+  "message": "string",
+  "hint": "string",
+  "retryable": "boolean"
+ }
+}

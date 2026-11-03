@@ -1,0 +1,7 @@
+{
+ "title": "list_recipes",
+ "schema_version": "4.0.0",
+ "type": "object",
+ "additionalProperties": true,
+ "description": "JSON result of trammel list_recipes"
+}

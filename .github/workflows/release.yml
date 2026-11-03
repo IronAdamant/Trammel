@@ -1,0 +1,142 @@
+# Builds the six release binaries, publishes a GitHub Release with checksums,
+# then publishes the npm packages. Nothing in this file runs on a pull request.
+# Pushing a tag v* is what starts it. Do not push a tag from a rewrite branch.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            asset: trammel-linux-x64
+            linker: musl-gcc
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: trammel-linux-arm64
+            linker: musl-gcc
+          - os: macos-15
+            target: aarch64-apple-darwin
+            asset: trammel-darwin-arm64
+            linker: ""
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: trammel-darwin-x64
+            linker: ""
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset: trammel-windows-x64
+            linker: ""
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset: trammel-windows-arm64
+            linker: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.target }}
+      - name: musl linker
+        if: matrix.linker != ''
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.linker }}" ]; then
+            export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.linker }}"
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${{ matrix.linker }}"
+          fi
+          cargo build --release --locked --target ${{ matrix.target }}
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${{ matrix.target }}"
+          mkdir -p "dist/${{ matrix.asset }}"
+          if [[ "${{ matrix.asset }}" == trammel-windows-* ]]; then
+            cp "target/${dest}/release/trammel.exe" "target/${dest}/release/trammel-mcp.exe" "dist/${{ matrix.asset }}/"
+          else
+            cp "target/${dest}/release/trammel" "target/${dest}/release/trammel-mcp" "dist/${{ matrix.asset }}/"
+          fi
+          tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}"
+          if command -v sha256sum >/dev/null; then
+            (cd dist && sha256sum "${{ matrix.asset }}.tar.gz" > "${{ matrix.asset }}.sha256")
+          else
+            (cd dist && shasum -a 256 "${{ matrix.asset }}.tar.gz" > "${{ matrix.asset }}.sha256")
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}.tar.gz
+            dist/${{ matrix.asset }}.sha256
+
+  github-release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          cat *.sha256 | sort > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+            --title "$tag" \
+            --notes "Trammel ${tag}. Verify SHA256SUMS before installing. npm publish follows this job and needs the NPM_TOKEN repository secret."
+
+  npm:
+    name: npm registry
+    needs: github-release
+    if: needs.github-release.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish platform packages, then the wrapper
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN is not set. Add it as a repository secret. The value is not printed."
+            exit 1
+          fi
+          for asset in trammel-linux-x64 trammel-linux-arm64 trammel-darwin-x64 trammel-darwin-arm64 trammel-windows-x64 trammel-windows-arm64; do
+            pkg="npm/${asset}"
+            tar -xzf "dist/${asset}.tar.gz" -C "${pkg}" --strip-components=1
+            npm pkg set version="${version}" --prefix "${pkg}"
+            npm publish "${pkg}" --access public
+          done
+          npm pkg set version="${version}" --prefix npm/trammel
+          npm publish npm/trammel --access public

@@ -1,5 +1,7 @@
 # Trammel — System Prompt for LLM Coding Assistants
 
+Rust 4.0 speaks JSON on stdout and the same tool names as MCP. Use `trammel <tool> --project-root .` or `trammel mcp`. `record_step` and `create_plan` return `tool_removed`. The store is `.trammel/`, not `trammel.db`. Contract: `docs/LLM_CONTRACT.md`. The rest of this file describes the Python 3.15.3 surface that the parity tests still call.
+
 You have access to **Trammel**, a planning and verification harness. **MCP** is one integration path (`trammel-mcp`); the same capabilities exist via the **Python API** and **CLI**, and the **SQLite store** holds plans and recipes for any process. Sub-agents in other environments often **do not** use MCP—hand them **steps, `depends_on`, and constraints** from `get_plan` / exported JSON or a shared `trammel.db`, not MCP calls.
 
 Trammel helps you decompose multi-file coding tasks into dependency-aware strategies, verify edits incrementally, learn from failures via constraints, and cache successful strategies as reusable recipes.

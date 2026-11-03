@@ -1,7 +1,7 @@
 # Trammel — Project documentation index
 
 **Updated:** 2026-11-03
-**Version:** 3.15.3
+**Version:** Python 3.15.3, Rust rewrite 4.0.0 (unreleased)
 **Purpose:** Stdlib-only planning harness: dependency-aware decomposition (15 languages: Python, TypeScript, JavaScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig), parallel beam execution (9 strategies), typed symbol analysis, incremental verification, failure constraint propagation, structural recipe matching (with abbreviation expansion, stable content-addressed sig), recipe pruning, SQLite persistence (15 tables), **implicit dependency inference** (naming conventions, shared state, pattern learning). MCP server (33 tools, 12 primary by default) for LLM integration with reference system prompt. Regex specs live in `SPEC_REGISTRY` (12 entries). PEP 561 typed (`py.typed` marker). **v3.12.1** fixes the Python 3.14 SQLite transaction-nesting bug, hardens `get_plan` against corrupt strategy_json, makes `explore` scope-aware, deduplicates `recipe_files`, and adds `prune_plans`. **v3.12.0** split every module under 500 LOC (14 new modules, same public API) and externalized naming/role patterns to `data/patterns.json`.
 
 ## Root files
@@ -19,6 +19,7 @@
 | Path | Purpose |
 |------|---------|
 | `ci.yml` | Tests on push/PR to `main` (Python 3.10–3.13 on Ubuntu and macOS). Python 3.12 also runs a fresh-venv MCP handshake. |
+| `rust.yml` | `cargo test` on Linux, macOS, and Windows; Python parity; zero-dependency check; benchmark rule. |
 | `publish.yml` | On **publish**ed GitHub Release: build sdist/wheel, `unittest`, upload to PyPI via **OIDC Trusted Publishing** (`environment: release`; no PyPI token in secrets). |
 
 ## wiki-local/
@@ -217,3 +218,22 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 - **1.0.0:** Full rework — dependency-aware planning (import analysis + toposort), real beam branching (3 strategies), incremental verification, structured failure analysis, constraint propagation, enriched 5-table schema, MCP server (13 tools), 45 tests.
 - **0.3.0:** Min similarity threshold, async def support, filtered os.walk, dead code removal.
 - **0.2.0:** Recipe similarity fix (shared-vocabulary trigram cosine), `sys.executable`, beam edits carry `path`, `foreign_keys=ON`, `dumps_json`, `__version__`/`--version`.
+
+## Rust 4.0 tree (unreleased)
+
+| Path | Purpose |
+|------|---------|
+| `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Package 4.0.0, toolchain 1.99.1, lockfile names only `trammel` |
+| `src/main.rs`, `src/bin/trammel_mcp.rs`, `src/cli.rs`, `src/mcp.rs`, `src/tools.rs` | Both binaries, JSON CLI, stdio MCP |
+| `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/{json,kind}.rs` | Vendored stele parser core. `python_symbols` builds a newline index once so line numbers match the prefix scan without repeating it per identifier |
+| `src/lang/{code,symbols,imports,analyze,blank}.rs` | Hand-written extractors for the 15 languages |
+| `src/planner.rs`, `src/score.rs`, `src/goal.rs`, `src/strategies.rs`, `src/implicit.rs` | Decomposition |
+| `src/store.rs`, `src/migrate.rs` | Snapshot store and read-only SQLite import |
+| `src/harness.rs`, `src/export.rs`, `src/doctor.rs`, `src/benchstat.rs` | Verify, plan export, doctor, regression rule |
+| `scripts/parity_check.py`, `scripts/bench_gate.py`, `scripts/same_runner_bench.py` | Parity against Python 3.15.3, the recorded time floors, and a same-machine Python-vs-Rust run |
+| `bench/python_baseline.json`, `bench/rust_measured.json`, `bench/same_runner.json` | Recorded Python medians, the Rust startup sample, and the same-machine comparison |
+| `.github/workflows/release.yml` | On a `v*` tag only: six binaries, `SHA256SUMS`, GitHub Release, then npm if `NPM_TOKEN` is set. Not run from a pull request. |
+| `npm/trammel`, `npm/trammel-*` | npm launcher and six platform packages. Binaries are inserted by the release job. |
+| `schemas/*.schema.json` | One schema file per tool plus the envelope |
+| `AGENTS.md`, `docs/LLM_CONTRACT.md`, `llms.txt` | Agent guide and JSON contract |
+| `install.sh`, `install.ps1`, `server.json` | Install stubs and registry document; nothing is published |

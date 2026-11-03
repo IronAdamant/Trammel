@@ -1,0 +1,7 @@
+{
+ "title": "failure_history",
+ "schema_version": "4.0.0",
+ "type": "object",
+ "additionalProperties": true,
+ "description": "JSON result of trammel failure_history"
+}

@@ -37,6 +37,49 @@ git clone https://github.com/IronAdamant/Trammel.git
 cd Trammel && pip install -e '.[mcp]'
 ```
 
+## Benchmarks
+
+Figures below were measured, not estimated. Rust is faster on every row than both the recorded baseline and a same-machine rerun of Python 3.15.3.
+
+The recorded column is `bench/python_baseline.json`: Trammel 3.15.2, Python 3.13.5, mcp 1.30.0, Linux 6.12.94 x86_64, 8 vCPU Intel Xeon, 15.6 GB, 2026-11-04. That box is not the one that produced the other two columns.
+
+The same-runner columns are `bench/same_runner.json`, measured 2026-11-03 on Linux 6.12.94 x86_64, 4 vCPU Intel Xeon, 15.6 GB, rustc 1.99.1, Python 3.12.3, Trammel 3.15.3, mcp 2.3.0. rich is the 13.9.4 git tag (190 `.py` files). flask is the 3.1.0 sdist (83 `.py` files). Startup and cold MCP rows are 10 runs. The flask full run is 3. Every other row is 7. Values are medians in milliseconds.
+
+| Benchmark | Recorded Python | Same-runner Python | Same-runner Rust |
+|---|---:|---:|---:|
+| CLI `--version` | 78.1 | 87.19 | 0.70 |
+| CLI `--help` | 78.7 | 91.88 | 0.71 |
+| CLI dry-run rich | 469.9 | 97.86 | 19.89 |
+| CLI dry-run flask | 253.7 | 318.88 | 10.41 |
+| CLI dry-run trammel-src | 332.4 | 109.34 | 11.87 |
+| CLI full flask, test command `true` | 321.1 | 356.13 | 28.44 |
+| MCP primary `initialize` | 306.6 | 568.73 | 0.94 |
+| MCP primary `tools/list` | 1.8 | 1.72 | 0.10 |
+| MCP all `initialize` | 308.8 | 559.88 | 0.94 |
+| MCP all `tools/list` | 2.1 | 2.00 | 0.32 |
+| MCP status, empty store | 18.8 | 12.74 | 0.16 |
+| MCP estimate rich | 4.5 | 4.16 | 1.01 |
+| MCP decompose rich | 425.6 | 550.84 | 20.85 |
+| MCP decompose rich, summary only | 400.0 | 566.02 | 19.76 |
+| MCP decompose flask | 171.3 | 211.98 | 8.81 |
+| MCP explore rich, 3 beams | 427.7 | 538.33 | 20.29 |
+| MCP start_plan rich | 417.5 | 566.15 | 20.60 |
+| MCP get_plan | 5.9 | 3.61 | 0.54 |
+| MCP resume | 6.4 | 3.46 | 0.49 |
+| MCP verify_step, rich import | 183.3 | 172.86 | 135.34 |
+| MCP verify_step, Trammel unit tests | 3179.7 | 3417.21 | 2767.64 |
+| MCP record_steps | 7.6 | 5.65 | 1.65 |
+| MCP add_constraint | 6.4 | 2.69 | 0.94 |
+| MCP get_constraints | 3.9 | 2.96 | 0.24 |
+| MCP export_plan | 4.2 | 2.92 | 0.58 |
+| MCP complete_plan | 10.7 | 5.82 | 1.14 |
+| MCP get_recipe | 7.9 | 4.37 | 0.53 |
+| MCP list_plans | 5.2 | 2.76 | 0.34 |
+| MCP status after the flow | 4.3 | 2.44 | 0.26 |
+| MCP VmHWM after the flow (MB) | 66.6 | 75.30 | 8.09 |
+
+`tools/list` payload, one measurement of the JSON line: Python primary 12,508 bytes and 12 tools, Python all 23,515 bytes and 33 tools, Rust primary 3,340 bytes and 12 tools, Rust all 8,777 bytes and 32 tools. This x86_64 release build is `trammel` 2,131,840 bytes and `trammel-mcp` 2,032,264 bytes. The CI floor in `scripts/bench_gate.py` fails a build whose `--version`, `--help`, or MCP `initialize` median is at or above the recorded Python median. The regression rule (an A/A run passes, an injected slowdown fails, no percentage tolerance) is `cargo test --lib benchstat`.
+
 ## Quick Start
 
 ### With Claude Code or Cursor (MCP)

@@ -8,10 +8,23 @@
 
 ## Active context
 
-- **Version:** 3.15.3
-- **Focus:** MCP SDK 2.x startup (`list_tools` removed), `isError` tool results, Trammel `serverInfo` version, doc-count parity. CI covers Ubuntu and macOS.
+- **Version:** Python 3.15.3 remains on main. Rust 4.0.0 is release-ready on the rewrite branch and is not tagged.
+- **Focus:** Std-only Rust port. The release tag is `v4.0.0`. Do not push that tag from the agent session.
 
 ## Session log
+
+---
+
+## Rust 4.0 rewrite (draft, not released)
+
+**Date:** 2026-11-03
+
+- Cargo package `trammel` 4.0.0, empty `[dependencies]`. Parser core copied from stele-context `244561a` (pull/5). `python_symbols` keeps a newline index so line numbers stay the same and large files stay cheap. `scripts/syntax_core_manifest.txt` records the digest, including that local change.
+- Native store `.trammel/store`. `trammel migrate` reads a SQLite db and WAL read-only. `status` reads the store it already holds.
+- 32 MCP tools: the 33 Python tools minus `record_step` and `create_plan`, plus `verify_plan`. Primary surface stays 12.
+- Parity: five archetypes match Python 3.15.3 on files, descriptions, symbols, relevance, rationale, fingerprint, and dependency edge sets. `test_farm` edge order differs where implicit edges share a confidence. The same input is byte-identical across two Rust runs (`tests/goldens/test_farm_decompose.json`). Four processes claim one store in `tests/four_claims.rs`.
+- Same-runner medians are in `bench/same_runner.json` and the README table. Rust is ahead of Python 3.15.3 on every row, and ahead of the recorded 8 vCPU baseline as well. Not tagged. Not published.
+- Release path, when a person pushes tag `v4.0.0`: `.github/workflows/release.yml` builds six binaries, publishes the GitHub Release with `SHA256SUMS` using `github.token`, then publishes npm. The npm job needs repository secret `NPM_TOKEN`.
 
 ---
 
