@@ -43,7 +43,7 @@ Rust sorts implicit edges by confidence, highest first. Equal confidences keep d
 
 ## Distribution
 
-`.github/workflows/release.yml` runs only on a `v*` tag. It builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS` to a GitHub Release, and only then publishes npm. The npm job reads the repository secret `NPM_TOKEN` (an npm automation token with publish rights). The workflow does not print the token. Do not create the secret's value in the repo, and do not push a tag from this branch.
+`.github/workflows/release.yml` runs only on a `v*` tag. It builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS` to a GitHub Release, and only then publishes npm. The release job does not check out the repo, so every `gh` command passes `--repo "$GITHUB_REPOSITORY"`. The npm job checks out the repo, authenticates `@iron_adamant` with `NODE_AUTH_TOKEN`, publishes the six platform packages, then the wrapper, and skips a version that is already on the registry. The npm job reads the repository secret `NPM_TOKEN` (an npm automation token with publish rights). The workflow does not print the token. Do not create the secret's value in the repo, and do not push a tag from this branch.
 
 The npm wrapper is `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `npx @iron_adamant/trammel`). The commands on PATH stay `trammel` and `trammel-mcp`. Its optionalDependencies are `@iron_adamant/trammel-<os>-<arch>` for the six platforms. The release job copies each binary in and publishes with `--access public`. The Rust crate stays at zero dependencies.
 
