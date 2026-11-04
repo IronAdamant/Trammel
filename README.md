@@ -5,7 +5,7 @@
 
 **Trammel helps coding agents plan, verify, and remember multi-step tasks.**
 
-It breaks a goal into ordered steps, checks each step, learns from failures, and stores a successful strategy as a recipe. Version 4.0.0 is one std-only Rust binary. The commands are `trammel` and `trammel-mcp`.
+It breaks a goal into ordered steps, checks each step, learns from failures, and stores a successful strategy as a recipe. Version 4.0.1 is one std-only Rust binary. The commands are `trammel` and `trammel-mcp`.
 
 The old Python version lives on the `python-legacy` branch.
 
@@ -28,10 +28,10 @@ The old Python version lives on the `python-legacy` branch.
 
 ```bash
 npm i -g @iron_adamant/trammel
-npx @iron_adamant/trammel
+npx -y @iron_adamant/trammel mcp
 ```
 
-A global install puts `trammel` and `trammel-mcp` on `PATH`. The wrapper is `@iron_adamant/trammel`. The binary for this machine is one of the six `@iron_adamant/trammel-<os>-<arch>` packages.
+`npx` runs the `trammel` command. The positional argument `mcp` starts the same stdio server as `trammel-mcp`. A global install still puts both `trammel` and `trammel-mcp` on `PATH`. The wrapper is `@iron_adamant/trammel`. The binary for this machine is one of the six `@iron_adamant/trammel-<os>-<arch>` packages.
 
 From a GitHub Release, without npm:
 
@@ -96,14 +96,14 @@ The same-runner columns are `bench/same_runner.json`, measured 2026-11-03 on Lin
 
 ### MCP
 
-`trammel-mcp` speaks stdio. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
+`trammel-mcp` speaks stdio. `npx -y @iron_adamant/trammel mcp` starts that same server. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
 
 ```json
 {
   "mcpServers": {
     "trammel": {
-      "command": "trammel-mcp",
-      "args": []
+      "command": "npx",
+      "args": ["-y", "@iron_adamant/trammel", "mcp"]
     }
   }
 }
@@ -199,7 +199,7 @@ CI runs those on Linux, macOS, and Windows. The benchmark job checks the regress
 
 ## Publishing
 
-A `v*` tag runs `.github/workflows/release.yml`. That workflow builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS`, then publishes the npm packages. `workflow_dispatch` with a `tag` input republishes an existing release and does not rebuild. `scripts/release.sh` only checks `Cargo.toml` and prints the tag command. It does not publish.
+A `v*` tag runs `.github/workflows/release.yml`. That workflow builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS`, then publishes the npm packages. `workflow_dispatch` with a `tag` input republishes an existing release and does not rebuild. `scripts/release.sh` only checks `Cargo.toml` and prints the tag command. It does not publish. `server.json` is the MCP Registry manifest for `io.github.IronAdamant/trammel`. Publishing that listing is a separate step and is not run from a pull request.
 
 Python release notes below 4.0.0:
 

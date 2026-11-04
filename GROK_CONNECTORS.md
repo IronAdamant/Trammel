@@ -12,11 +12,11 @@ When Grok supports adding custom MCP servers:
 
 1. Start the server locally:
 
-   ```bash
-   trammel mcp
-   ```
+```bash
+trammel mcp
+```
 
-   `trammel-mcp` is the same server with no arguments. Install with `npm i -g @iron_adamant/trammel`.
+`npx -y @iron_adamant/trammel mcp` is the same server. `trammel-mcp` is the same server with no extra argument. Install with `npm i -g @iron_adamant/trammel`.
 
 2. For remote access from Grok, expose the endpoint over HTTPS using a secure tunnel (for example Cloudflare Tunnel).
 

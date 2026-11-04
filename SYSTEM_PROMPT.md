@@ -1,6 +1,6 @@
 # Trammel system prompt for LLM coding assistants
 
-Trammel 4.0.0 is a std-only Rust binary. It speaks JSON on stdout. The same names are MCP tools and CLI subcommands. Use `trammel <tool> --project-root .` or `trammel mcp`. Installed commands are `trammel` and `trammel-mcp` (`npm i -g @iron_adamant/trammel`). The store is `.trammel/`. An old `trammel.db` is imported with `trammel migrate` and left in place. Contract: `docs/LLM_CONTRACT.md`.
+Trammel 4.0.1 is a std-only Rust binary. It speaks JSON on stdout. The same names are MCP tools and CLI subcommands. Use `trammel <tool> --project-root .` or `trammel mcp`. `npx -y @iron_adamant/trammel mcp` starts the same server as `trammel-mcp`. The store is `.trammel/`. An old `trammel.db` is imported with `trammel migrate` and left in place. Contract: `docs/LLM_CONTRACT.md`.
 
 The old Python version lives on the `python-legacy` branch.
 

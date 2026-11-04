@@ -1,12 +1,30 @@
 {
-  "name": "io.github.ironadamant/trammel",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.IronAdamant/trammel",
+  "title": "Trammel",
   "description": "Dependency-aware planning, verification, and recipe memory for coding agents.",
-  "version": "4.0.0",
+  "version": "4.0.1",
+  "repository": {
+    "url": "https://github.com/IronAdamant/Trammel",
+    "source": "github"
+  },
   "packages": [
     {
-      "registry_type": "npm",
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@iron_adamant/trammel",
-      "transport": { "type": "stdio" }
+      "version": "4.0.1",
+      "runtimeHint": "npx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "Start the stdio MCP server. Same process as trammel-mcp."
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
     }
   ]
 }

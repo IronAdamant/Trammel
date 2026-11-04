@@ -1,12 +1,13 @@
 # Trammel
 
-Std-only planning binary for coding agents. Version 4.0.0. JSON on stdout.
+Std-only planning binary for coding agents. Version 4.0.1. JSON on stdout.
 
 - `trammel doctor`: store, languages, protocols, next step
 - `trammel decompose --goal "..." --project-root .`
 - `trammel start_plan --goal "..." --project-root .`
 - `trammel verify_step --project-root . --edits '[...]'`
 - `trammel mcp`: stdio MCP, protocols 2026-07-28, 2025-11-25, 2025-06-18
+- `npx -y @iron_adamant/trammel mcp` starts that same server. `trammel-mcp` still works.
 - Install with `npm i -g @iron_adamant/trammel` or `npx @iron_adamant/trammel`. The commands are `trammel` and `trammel-mcp`.
 
 The old Python version lives on the `python-legacy` branch.

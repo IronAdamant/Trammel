@@ -1,7 +1,7 @@
 # Trammel: project documentation index
 
 **Updated:** 2026-11-04
-**Version:** 4.0.0 (Rust binary and npm). The old Python version lives on the `python-legacy` branch.
+**Version:** 4.0.1 (Rust binary and npm). The old Python version lives on the `python-legacy` branch.
 **Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 32 MCP tools, 12 primary. Store is `.trammel/`.
 
 ## Removed from main
@@ -42,10 +42,10 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `.github/workflows/rust.yml` | cargo test, zero deps, no markers, syntax core, bench rule |
 | `.gitignore` | Build output, store, local databases, editor files |
 | `AGENTS.md` | Module map, commands, release rules for agents |
-| `CHANGELOG.md` | 4.0.0 note plus the Python 3.15.3 notes |
+| `CHANGELOG.md` | 4.0.1 note, then 4.0.0, plus the Python 3.15.3 notes |
 | `CLAUDE.md` | Source-tree guide for coding agents |
 | `Cargo.lock` | Locks the crate to itself. No other packages. |
-| `Cargo.toml` | Crate metadata, version 4.0.0, empty dependencies |
+| `Cargo.toml` | Crate metadata, version 4.0.1, empty dependencies |
 | `GROK_CONNECTORS.md` | How a Grok client starts trammel mcp |
 | `LICENSE` | MIT licence |
 | `LLM_Development.md` | Chronological log, Python history included |
@@ -175,7 +175,7 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `scripts/check_zero_deps.py` | Fail if Cargo.lock names anything but trammel |
 | `scripts/release.sh` | Print the tag command after checking Cargo.toml. Does not publish. |
 | `scripts/syntax_core_manifest.txt` | SHA-256 of the vendored parser files |
-| `server.json` | MCP registry id for the npm package |
+| `server.json` | MCP Registry manifest, schema 2025-12-11, name `io.github.IronAdamant/trammel` |
 | `src/benchstat.rs` | Median-interval regression rule |
 | `src/bin/trammel_mcp.rs` | trammel-mcp binary |
 | `src/canon.rs` | Stable JSON helpers |

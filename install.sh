@@ -2,7 +2,7 @@
 # Download a published Trammel release into ~/.local/bin. No root.
 # This does not publish anything. A missing release exits with the build command.
 set -eu
-version="${TRAMMEL_VERSION:-4.0.0}"
+version="${TRAMMEL_VERSION:-4.0.1}"
 os=$(uname -s)
 arch=$(uname -m)
 case "$os-$arch" in
