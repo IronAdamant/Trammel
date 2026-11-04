@@ -102,10 +102,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
-            --title "$tag" \
-            --notes "Trammel ${tag}. Verify SHA256SUMS before installing. npm publish of @iron_adamant/trammel and the six @iron_adamant/trammel-<os>-<arch> packages follows this job and needs the NPM_TOKEN repository secret. Scoped packages are published with --access public."
+          repo="${GITHUB_REPOSITORY}"
+          notes="Trammel ${tag}. Verify SHA256SUMS before installing. npm publish of @iron_adamant/trammel and the six @iron_adamant/trammel-<os>-<arch> packages follows this job and needs the NPM_TOKEN repository secret. Scoped packages are published with --access public."
+          # This job does not check out the repo. gh must be given --repo or it runs git and fails.
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            echo "release ${tag} already exists"
+            gh release upload "$tag" dist/*.tar.gz dist/SHA256SUMS --repo "$repo" --clobber
+          else
+            gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS --repo "$repo" --title "$tag" --notes "$notes"
+          fi
 
   npm:
     name: npm registry
@@ -118,6 +125,7 @@ jobs:
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org
+          scope: "@iron_adamant"
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -132,12 +140,22 @@ jobs:
             echo "NPM_TOKEN is not set. Add it as a repository secret. The value is not printed."
             exit 1
           fi
-          # @iron_adamant/* is restricted unless this flag is set.
+          publish() {
+            dir="$1"
+            name="$(npm pkg get name --prefix "$dir" | tr -d '"')"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published"
+              return 0
+            fi
+            # Scoped packages are restricted unless --access public is set.
+            npm publish "$dir" --access public
+          }
+          # Platform packages first, then the wrapper that optionalDepends on them.
           for asset in trammel-linux-x64 trammel-linux-arm64 trammel-darwin-x64 trammel-darwin-arm64 trammel-windows-x64 trammel-windows-arm64; do
             pkg="npm/${asset}"
             tar -xzf "dist/${asset}.tar.gz" -C "${pkg}" --strip-components=1
             npm pkg set version="${version}" --prefix "${pkg}"
-            npm publish "${pkg}" --access public
+            publish "$pkg"
           done
           npm pkg set version="${version}" --prefix npm/trammel
-          npm publish npm/trammel --access public
+          publish npm/trammel
