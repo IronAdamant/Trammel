@@ -45,7 +45,7 @@ Rust sorts implicit edges by confidence, highest first. Equal confidences keep d
 
 `.github/workflows/release.yml` runs only on a `v*` tag. It builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS` to a GitHub Release, and only then publishes npm. The npm job reads the repository secret `NPM_TOKEN` (an npm automation token with publish rights). The workflow does not print the token. Do not create the secret's value in the repo, and do not push a tag from this branch.
 
-`npm/trammel` is a launcher. The six `npm/trammel-*` packages are optionalDependencies; the release job copies the matching binary in before `npm publish`. The Rust crate stays at zero dependencies.
+The npm wrapper is `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `npx @iron_adamant/trammel`). The commands on PATH stay `trammel` and `trammel-mcp`. Its optionalDependencies are `@iron_adamant/trammel-<os>-<arch>` for the six platforms. The release job copies each binary in and publishes with `--access public`. The Rust crate stays at zero dependencies.
 
 ## Zero dependencies
 
