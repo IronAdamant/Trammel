@@ -1,17 +1,25 @@
 # Builds the six release binaries, publishes a GitHub Release with checksums,
-# then publishes the npm packages. Nothing in this file runs on a pull request.
-# Pushing a tag v* is what starts it. Do not push a tag from a rewrite branch.
+# then publishes the npm packages. A tag push runs the whole workflow.
+# workflow_dispatch runs only the npm job against an existing release.
+# Nothing in this file runs on a pull request.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag to publish to npm, such as v4.0.0
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   build:
+    if: github.event_name == 'push'
     name: ${{ matrix.asset }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -84,6 +92,7 @@ jobs:
             dist/${{ matrix.asset }}.sha256
 
   github-release:
+    if: github.event_name == 'push'
     name: GitHub Release
     needs: build
     runs-on: ubuntu-24.04
@@ -117,7 +126,7 @@ jobs:
   npm:
     name: npm registry
     needs: github-release
-    if: needs.github-release.result == 'success'
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.github-release.result == 'success')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -127,35 +136,68 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: "@iron_adamant"
       - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
         with:
           path: dist
           merge-multiple: true
+      - name: Download the existing release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          case "$tag" in
+            v[A-Za-z0-9._+-]*)
+              case "$tag" in
+                *[!A-Za-z0-9._+-]*) echo "tag has unexpected characters"; exit 1 ;;
+              esac
+              ;;
+            *) echo "tag must look like v4.0.0"; exit 1 ;;
+          esac
+          mkdir -p dist
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir dist
+          (cd dist && sha256sum -c SHA256SUMS)
+          printf '%s\n' "$tag" > dist/release-tag.txt
       - name: Publish platform packages, then the wrapper
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
           if [ -z "${NODE_AUTH_TOKEN}" ]; then
             echo "NPM_TOKEN is not set. Add it as a repository secret. The value is not printed."
             exit 1
           fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$(cat dist/release-tag.txt)"
+          else
+            tag="${REF_NAME}"
+          fi
+          version="${tag#v}"
           publish() {
             dir="$1"
+            case "$dir" in
+              ./npm/*) ;;
+              *) echo "refusing to publish a path npm would treat as a git repo: $dir"; exit 1 ;;
+            esac
             name="$(npm pkg get name --prefix "$dir" | tr -d '"')"
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
               echo "${name}@${version} is already published"
               return 0
             fi
             # Scoped packages are restricted unless --access public is set.
-            npm publish "$dir" --access public
+            # The ./ prefix keeps npm from reading npm/<pkg> as github.com/npm/<pkg>.
+            npm publish --access public "$dir"
           }
           # Platform packages first, then the wrapper that optionalDepends on them.
           for asset in trammel-linux-x64 trammel-linux-arm64 trammel-darwin-x64 trammel-darwin-arm64 trammel-windows-x64 trammel-windows-arm64; do
-            pkg="npm/${asset}"
-            tar -xzf "dist/${asset}.tar.gz" -C "${pkg}" --strip-components=1
-            npm pkg set version="${version}" --prefix "${pkg}"
-            publish "$pkg"
+            dir="./npm/${asset}"
+            tar -xzf "dist/${asset}.tar.gz" -C "$dir" --strip-components=1
+            npm pkg set version="${version}" --prefix "$dir"
+            publish "$dir"
           done
-          npm pkg set version="${version}" --prefix npm/trammel
-          publish npm/trammel
+          npm pkg set version="${version}" --prefix ./npm/trammel
+          publish ./npm/trammel
