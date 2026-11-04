@@ -232,7 +232,7 @@ Every module is under 500 LOC after the v3.12.0 split. The table groups related 
 | `src/harness.rs`, `src/export.rs`, `src/doctor.rs`, `src/benchstat.rs` | Verify, plan export, doctor, regression rule |
 | `scripts/parity_check.py`, `scripts/bench_gate.py`, `scripts/same_runner_bench.py` | Parity against Python 3.15.3, the recorded time floors, and a same-machine Python-vs-Rust run |
 | `bench/python_baseline.json`, `bench/rust_measured.json`, `bench/same_runner.json` | Recorded Python medians, the Rust startup sample, and the same-machine comparison |
-| `.github/workflows/release.yml` | On a `v*` tag only: six binaries, `SHA256SUMS`, GitHub Release (`gh --repo`, no checkout), then npm (`NODE_AUTH_TOKEN`, platforms before the wrapper) if `NPM_TOKEN` is set. Not run from a pull request. |
+| `.github/workflows/release.yml` | On a `v*` tag: six binaries, `SHA256SUMS`, GitHub Release (`gh --repo`, no checkout), then npm (`./npm/<pkg>`, platforms before the wrapper). `workflow_dispatch` republishes an existing tag. Not run from a pull request. |
 | `npm/trammel`, `npm/trammel-*` | npm launcher published as `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `npx @iron_adamant/trammel`) and six `@iron_adamant/trammel-<os>-<arch>` packages. Commands stay `trammel` and `trammel-mcp`. Binaries are inserted by the release job. |
 | `schemas/*.schema.json` | One schema file per tool plus the envelope |
 | `AGENTS.md`, `docs/LLM_CONTRACT.md`, `llms.txt` | Agent guide and JSON contract |
