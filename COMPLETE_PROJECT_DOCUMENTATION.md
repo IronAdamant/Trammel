@@ -49,7 +49,8 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `GROK_CONNECTORS.md` | How a Grok client starts trammel mcp |
 | `LICENSE` | MIT licence |
 | `LLM_Development.md` | Chronological log, Python history included |
-| `README.md` | Install, benchmarks, and the Python release notes |
+| `MIGRATION.md` | Differences between Python 3.15.3 and Rust 4.0.1, for people moving stores and clients |
+| `README.md` | Install, benchmarks, the Python release notes, and a link to MIGRATION.md |
 | `SYSTEM_PROMPT.md` | MCP and CLI tool loop for LLM clients |
 | `bench/python_baseline.json` | Recorded Python medians used as CI floors |
 | `bench/rust_measured.json` | Last Rust medians written by bench_gate.py |
