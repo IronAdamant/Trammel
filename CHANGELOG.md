@@ -2,6 +2,10 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in `README.md` (Full Changelog) and `LLM_Development.md`.
 
+## 4.0.1
+
+Prepare the official MCP Registry listing `io.github.IronAdamant/trammel`. `npx @iron_adamant/trammel mcp` starts the same stdio server as `trammel-mcp`. `server.json` follows schema `2025-12-11` and passes `mcp` as a positional argument. The seven `@iron_adamant/trammel` npm packages and the crate version move to 4.0.1 together. The JSON contract `schema_version` stays `4.0.0`. Not tagged and not published from this change.
+
 ## 4.0.0
 
 Rust binary and npm packages `@iron_adamant/trammel` and `@iron_adamant/trammel-<os>-<arch>`. Store is `.trammel/`. MCP surface is 32 tools. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. Releases are GitHub Release binaries plus npm. There is no PyPI publish from this tree.

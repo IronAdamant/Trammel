@@ -1,6 +1,6 @@
 # Trammel technical specification
 
-**Version:** 4.0.0
+**Version:** 4.0.1
 **Language:** Rust, standard library only. No crates.
 
 The old Python version lives on the `python-legacy` branch.
@@ -13,7 +13,7 @@ Stele retrieves context. Chisel analyses code. Trammel plans. Each one runs alon
 
 ## 2. Product
 
-Two binaries from one crate: `trammel` and `trammel-mcp`. npm package `@iron_adamant/trammel` launches the matching `@iron_adamant/trammel-<os>-<arch>` binary. Commands on `PATH` stay `trammel` and `trammel-mcp`.
+Two binaries from one crate: `trammel` and `trammel-mcp`. npm package `@iron_adamant/trammel` launches the matching `@iron_adamant/trammel-<os>-<arch>` binary. `npx -y @iron_adamant/trammel mcp` starts the MCP server. `trammel-mcp` does the same with no extra argument. Commands on `PATH` stay `trammel` and `trammel-mcp`. The registry manifest is `server.json` (`io.github.IronAdamant/trammel`).
 
 JSON is the default stdout. `--human` prints indented JSON. Exit codes: 0 success, 1 failure, 2 usage.
 

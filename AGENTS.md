@@ -1,6 +1,6 @@
 # Trammel agent guide
 
-Trammel 4.0.0 is one std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. The old Python version lives on the `python-legacy` branch. Do not tag or publish from a task branch.
+Trammel 4.0.1 is one std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch. Do not tag or publish from a task branch.
 
 ## Commands
 
@@ -13,7 +13,7 @@ python scripts/check_no_todos.py
 python scripts/check_syntax_core.py
 ```
 
-`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.0",...}`.
+`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.1",...}`.
 
 ## Module map
 

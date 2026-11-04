@@ -2,7 +2,7 @@
 
 ## Project overview
 
-**Trammel** 4.0.0 is a std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. It plans multi-step coding work for an LLM: dependency-aware decomposition, nine beam orderings, isolated verification, failure constraints, and a local recipe store. It does not call an LLM.
+**Trammel** 4.0.1 is a std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. It plans multi-step coding work for an LLM: dependency-aware decomposition, nine beam orderings, isolated verification, failure constraints, and a local recipe store. It does not call an LLM.
 
 The old Python package lives on the `python-legacy` branch. Entries below 4.0.0 describe that package.
 
@@ -10,11 +10,21 @@ The old Python package lives on the `python-legacy` branch. Entries below 4.0.0 
 
 ## Active context
 
-- **Version:** 4.0.0 on main (this change removes the Python tree from main). npm `@iron_adamant/trammel` 4.0.0 and the six platform packages are already published. Do not tag, bump, or publish from a task branch.
+- **Version:** 4.0.1 is prepared for the MCP Registry name `io.github.IronAdamant/trammel`. npm `@iron_adamant/trammel` 4.0.0 and the six platform packages are already published. Do not tag or publish 4.0.1 from a task branch.
 - **Store:** `.trammel/`. `trammel migrate` imports an old `trammel.db`.
 - **CI:** `.github/workflows/rust.yml` on Linux, macOS, and Windows. Release workflow is `.github/workflows/release.yml` (unchanged). PyPI workflow removed.
 
 ## Session log
+
+---
+
+## 4.0.1 MCP Registry manifest
+
+**Date:** 2026-11-04
+
+- `trammel mcp` is the positional argument that starts the same stdio server as `trammel-mcp`. `npx -y @iron_adamant/trammel mcp` uses it, because `npx` launches the `trammel` bin.
+- `server.json` names `io.github.IronAdamant/trammel`, schema `2025-12-11`, npm `@iron_adamant/trammel` 4.0.1, transport stdio, package argument `mcp`. The wrapper `package.json` sets `mcpName` to the same name.
+- Crate and all seven npm packages are 4.0.1. JSON `schema_version` stays 4.0.0. Not tagged. Not published.
 
 ---
 

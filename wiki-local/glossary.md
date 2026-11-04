@@ -1,6 +1,6 @@
 # Trammel glossary
 
-Terms for the 4.0.0 binary. Python-only names (the importable package, `trammel.db` as the live store, `record_step`, `create_plan`) are on the `python-legacy` branch.
+Terms for the 4.0.1 binary. Python-only names (the importable package, `trammel.db` as the live store, `record_step`, `create_plan`) are on the `python-legacy` branch.
 
 | Term | Definition |
 |------|------------|

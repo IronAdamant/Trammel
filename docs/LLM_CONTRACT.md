@@ -18,7 +18,7 @@ Failure:
 
 Exit codes: `0` success, `1` failure, `2` usage. MCP puts the same object in `structuredContent` and sets `isError` to true on failure.
 
-`schema_version` is `4.0.0`. The Rust MCP surface is 32 tools: `verify_plan` is included, and `record_step` / `create_plan` are not. Breaking changes wait for 5.0. `trammel.plan` exports keep `format_version` 1. The npm package is `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `npx @iron_adamant/trammel`). The installed commands stay `trammel` and `trammel-mcp`.
+`schema_version` is `4.0.0`. The Rust MCP surface is 32 tools: `verify_plan` is included, and `record_step` / `create_plan` are not. Breaking changes wait for 5.0. `trammel.plan` exports keep `format_version` 1. The npm package is `@iron_adamant/trammel` 4.0.1 (`npm i -g @iron_adamant/trammel`, `npx -y @iron_adamant/trammel mcp`). The installed commands stay `trammel` and `trammel-mcp`. The registry name is `io.github.IronAdamant/trammel` (`server.json`).
 
 The old Python version lives on the `python-legacy` branch.
 

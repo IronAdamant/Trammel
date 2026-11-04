@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Trammel 4.0.0 is one std-only Rust binary (`trammel`, `trammel-mcp`) plus the npm wrapper `@iron_adamant/trammel`. The old Python version lives on the `python-legacy` branch.
+Trammel 4.0.1 is one std-only Rust binary (`trammel`, `trammel-mcp`) plus the npm wrapper `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch.
 
 This file is the source-tree guide. Do not confuse it with a client `CLAUDE.md` that tells an assistant how to call the MCP server.
 
@@ -16,7 +16,7 @@ python scripts/bench_gate.py --self-test
 python scripts/bench_gate.py target/release/trammel
 ```
 
-`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.0",...}`.
+`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.1",...}`.
 
 `scripts/release.sh X.Y.Z` checks `Cargo.toml` and prints the tag command. It does not tag or publish.
 

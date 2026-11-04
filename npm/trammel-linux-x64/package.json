@@ -1,6 +1,6 @@
 {
   "name": "@iron_adamant/trammel-linux-x64",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Platform binary for Trammel. Populated by the GitHub Release workflow; not published from a pull request.",
   "os": [
     "linux"

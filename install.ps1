@@ -1,7 +1,7 @@
 # Download a published Trammel release into the user binary directory. No administrator.
 # This does not publish anything. A missing release prints the build command and exits.
 $ErrorActionPreference = "Stop"
-$version = if ($env:TRAMMEL_VERSION) { $env:TRAMMEL_VERSION } else { "4.0.0" }
+$version = if ($env:TRAMMEL_VERSION) { $env:TRAMMEL_VERSION } else { "4.0.1" }
 $arch = if ($env:PROCESSOR_ARCHITECTURE -match "ARM64") { "arm64" } else { "x64" }
 $asset = "trammel-windows-$arch"
 $url = "https://github.com/IronAdamant/Trammel/releases/download/v$version/$asset.tar.gz"
