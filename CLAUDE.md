@@ -1,56 +1,59 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Trammel 4.0.0 is one std-only Rust binary (`trammel`, `trammel-mcp`) plus the npm wrapper `@iron_adamant/trammel`. The old Python version lives on the `python-legacy` branch.
 
-## What This Is
-
-Trammel is a dependency-aware task planner for LLM coding assistants: it decomposes goals into ordered steps, explores strategy variants (beam search), verifies steps, learns constraints from failures, and stores successful strategies as reusable recipes. It ships as a Python library, a CLI, and an MCP server (33 tools; ~12 primary advertised by default via `TRAMMEL_MCP_SURFACE`).
-
-Note: the global `~/CLAUDE.md` describes how to *use* the Trammel MCP server as a client. This repo is Trammel's *source* — don't confuse the two when "trammel" tools appear in your MCP tool list.
-
-**Hard constraint: the core is stdlib-only.** Do not add third-party dependencies. The only dependency is the optional `mcp` package (extra: `trammel[mcp]`) used by the MCP server entry point.
+This file is the source-tree guide. Do not confuse it with a client `CLAUDE.md` that tells an assistant how to call the MCP server.
 
 ## Commands
 
 ```bash
-pip install -e '.[mcp]'                                     # dev install
-
-# Tests (unittest, same command CI runs on Python 3.10–3.13)
-python -m unittest discover -v -s tests -p 'test_*.py'      # full suite
-python -m unittest tests.test_strategies -v                 # one module
-python -m unittest tests.test_trammel.SomeCase.test_name    # one test
-pytest                                                      # also configured (pyproject excludes tests/archetypes)
-
-# Run
-python -m trammel "some goal" --root /path/to/project --dry-run   # CLI (explore only)
-trammel-mcp                                                       # MCP server on stdio; TRAMMEL_DB_PATH overrides db location
+cargo test --locked
+cargo build --release
+python scripts/check_zero_deps.py
+python scripts/check_no_todos.py
+python scripts/check_syntax_core.py
+python scripts/bench_gate.py --self-test
+python scripts/bench_gate.py target/release/trammel
 ```
 
-Releases: bump `version` in `pyproject.toml` (see `scripts/release.sh`); publishing to PyPI happens via GitHub release → `publish.yml` (OIDC trusted publishing, no tokens).
+`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.0",...}`.
 
-## Architecture
+`scripts/release.sh X.Y.Z` checks `Cargo.toml` and prints the tag command. It does not tag or publish.
 
-All state lives in one SQLite database (`DEFAULT_DB_PATH = "trammel.db"`, relative to cwd; `*.db` is gitignored). Layers, top to bottom:
+## Layout
 
-**MCP layer** — `mcp_stdio.py` (entry point) → `dispatch_tool()` in `mcp_server.py` → per-tool `_handle_*` functions. Tool JSON schemas live in `tool_schemas.py`. The two registries (`_TOOL_SCHEMAS`, `_DISPATCH`) are diffed at module import and a mismatch raises `RuntimeError` — **to add an MCP tool you must touch both files**, then add a smoke test in `tests/test_mcp_dispatch.py` (which also asserts parity). `coerce_int_params()` casts string→int per schema because MCP clients may stringify numbers.
+- `src/` is the library. `src/main.rs` and `src/bin/trammel_mcp.rs` are the two binaries. Both call `src/cli.rs` and `src/tools.rs`.
+- `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs` decompose a goal and run the nine beams. Implicit-edge rules are `data/patterns.json`, embedded with `include_str!`.
+- `src/lang/` detects language, extracts symbols, and resolves imports. Python uses the stele-context parser under `src/syntax/`, `src/lang/python/`, and `src/lang/python_symbols/`. `scripts/syntax_core_manifest.txt` is their digest. Other languages use `src/lang/code.rs`, `src/lang/symbols.rs`, and `src/lang/imports.rs`.
+- `src/store.rs` is the `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
+- `schemas/` has one JSON schema per tool. A new tool needs a schema file and a row in `src/tools.rs`.
+- `tests/archetypes/` and `parity/fixtures/` are sample projects for the Rust tests. They are not a Python package.
+- `tests/goldens/test_farm_decompose.json` is the decompose golden. `bench/` holds recorded timings.
+- `npm/` is the wrapper and the six platform packages. The release workflow copies binaries in at publish time.
 
-**Planning core** — `core.py` (`Planner`: decompose → recipe lookup → step generation → constraint application), `strategies.py` (`_STRATEGY_REGISTRY` of step orderings: bottom-up, top-down, risk-first, critical-path, etc.), `planner_helpers.py` (beam variants), `goal_nlp.py` (goal parsing/intent), `scoring.py` (step relevance), `constraints.py` (avoid/dependency/incompatible/requires rules, mutate steps in place).
+## MCP
 
-**Store layer** — `store.py` composes mixins into `RecipeStore` (context manager): `store_plans.py`, `store_recipes.py`, `store_retrieval.py` (similarity lookup), `store_scaffolds.py`, `store_agents.py` (multi-agent step claiming, 10-min claim expiry), `store_telemetry.py`. Schema "migrations" are additive `CREATE TABLE IF NOT EXISTS` in `_init_schema()` — there is no migration tool or schema versioning, so schema changes must be backward-compatible additions.
+The server advertises **32 tools**. Primary surface is 12 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included.
 
-**Language analysis** — `analyzer_engine.py` (generic regex engine) driven by declarative per-language specs in `analyzer_specs.py` (`SPEC_REGISTRY`, 12 entries; C shares the C++ spec and Kotlin shares the Java spec), wrapped by `analyzers.py` (15 languages total: those 12 plus AST Python and regex TypeScript/JavaScript); import resolution per ecosystem in `analyzer_resolvers.py`. The language list in `tool_schemas.py` (`_LANGUAGES`) is validated against the analyzer registry at import — adding a language means updating spec, registry, and `_LANGUAGES` together. The store schema is 15 SQLite tables.
+## Add a language
 
-**Recipes & inference** — `recipe_fingerprints.py` + `recipe_index.py` (inverted index + MinHash LSH, stdlib-only) for retrieval; `implicit_deps*.py` + `pattern_learner.py` infer non-import couplings (naming conventions, shared state); heuristics/weights are externalized to `trammel/data/patterns.json`, loaded by `pattern_config.py`.
+1. Teach `src/lang/code.rs` the comment style if it is new.
+2. Add a scanner in `src/lang/symbols.rs` and a resolver in `src/lang/imports.rs`.
+3. Register the extension in `src/lang/mod.rs` and the name in `src/lang/analyze.rs`.
+4. Add a fixture under `parity/fixtures/` and compare `collect_symbols` with the golden before changing one.
 
-**Execution** — `harness.py` (`ExecutionHarness`) runs real tests in isolated temp copies. The MCP `verify_step` tool uses the same harness: it returns static analysis, preflight syntax checks, and import-integrity results plus a real isolated test run (slow per-step; manual test runs are often faster in single-agent workflows). The full incremental multi-step verification loop (`run_incremental`) is only driven via the Python API (`plan_and_execute`).
+## Zero dependencies
 
-`scaffold_*.py` handle greenfield planning (files that don't exist yet): decompose can't infer new files without explicit scaffold entries, which is why scaffold is mandatory for new-feature plans.
+`[dependencies]` stays empty. CI fails if `Cargo.lock` names any package other than `trammel`. No build script, no download.
 
-## Conventions
+## Release
 
-- **Max ~500 LOC per file** — this is why store/analyzer/scaffold logic is split into mixin/spec modules. Split rather than grow.
-- **`.gitignore` excludes `*.md`** — tracked docs (README, SYSTEM_PROMPT, wiki-local/, etc.) were force-added. New docs that should be committed need `git add -f`.
-- On code changes, update `COMPLETE_PROJECT_DOCUMENTATION.md` (file table) and the relevant `wiki-local/` pages; `LLM_Development.md` is the chronological dev log.
-- `tests/archetypes/` contains sample projects for regression tests, not tests — it's excluded from discovery in `pyproject.toml`.
-- `SYSTEM_PROMPT.md` is the orchestration guide shipped to MCP users; update it when tool behavior or recommended workflows change.
-- **Wikifier doc health is active here**: `monitored_paths.txt` covers `trammel/` plus README/SYSTEM_PROMPT/CLAUDE.md, with per-file wiki entries in `docs/wiki/<basename>.wiki.md`. After editing a monitored file: `wikifier record-change "<file>" "<reason>"`, update its wiki entry, then `wikifier mark-green "<file>" "<evidence>"`; run `wikifier update-maps` when imports change. The `/wikifier` skill (or the `wikifier` MCP server) has the full protocol. `file_health.md`, `pending_updates.md`, and `library.md` are managed artifacts — never hand-edit.
+`.github/workflows/release.yml` runs on a `v*` tag. It builds six binaries, uploads them with `SHA256SUMS`, then publishes npm. `workflow_dispatch` with a `tag` input republishes an existing release. Do not push a tag from a task branch. Do not create `NPM_TOKEN` in the repo.
+
+## Benchmarks
+
+A PR is slower only when both are true: the 95% median intervals do not overlap in the slow direction, and the Holm-adjusted one-sided Mann-Whitney p is below 0.05. There is no percentage tolerance. `benchstat` tests cover an A/A run (must pass) and an injected slowdown (must fail). Rust medians must also stay under the recorded Python floors in `scripts/bench_gate.py`.
+
+## Docs
+
+`AGENTS.md` is the short module map. `SYSTEM_PROMPT.md` is the tool loop for MCP clients. `docs/LLM_CONTRACT.md` is the JSON contract. `README.md` is the install and benchmark page.

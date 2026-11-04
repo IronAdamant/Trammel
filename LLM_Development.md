@@ -1,17 +1,32 @@
-# Trammel — LLM development log
+# Trammel: LLM development log
 
 ## Project overview
 
-**Trammel** is a stdlib-only Python package that externalizes the planning bottleneck for LLM coding assistants: dependency-aware decomposition, real beam strategy branching, incremental per-step verification, failure constraint propagation, and SQLite-backed recipe memory. It is a tool FOR LLMs, not a tool that calls LLMs.
+**Trammel** 4.0.0 is a std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. It plans multi-step coding work for an LLM: dependency-aware decomposition, nine beam orderings, isolated verification, failure constraints, and a local recipe store. It does not call an LLM.
 
-**Guidelines:** Single-purpose modules; no third-party deps for core; tests via `unittest` only. MCP server requires optional `mcp` package.
+The old Python package lives on the `python-legacy` branch. Entries below 4.0.0 describe that package.
+
+**Guidelines:** No third-party crates. `[dependencies]` stays empty. No new TODO or FIXME markers in `src/`.
 
 ## Active context
 
-- **Version:** Python 3.15.3 remains on main. Rust 4.0.0 is release-ready on the rewrite branch and is not tagged.
-- **Focus:** Std-only Rust port. The release tag is `v4.0.0`. Do not push that tag from the agent session.
+- **Version:** 4.0.0 on main (this change removes the Python tree from main). npm `@iron_adamant/trammel` 4.0.0 and the six platform packages are already published. Do not tag, bump, or publish from a task branch.
+- **Store:** `.trammel/`. `trammel migrate` imports an old `trammel.db`.
+- **CI:** `.github/workflows/rust.yml` on Linux, macOS, and Windows. Release workflow is `.github/workflows/release.yml` (unchanged). PyPI workflow removed.
 
 ## Session log
+
+---
+
+## Rust-only main
+
+**Date:** 2026-11-04
+
+- Branch `python-legacy` points at the pre-removal tip `dc7deb335e91e5a29541733a234dfc1ed24788a3`. Nothing on that branch was edited.
+- Removed from main: the `trammel/` package, Python unittest modules, `pyproject.toml`, `.github/workflows/ci.yml`, `.github/workflows/publish.yml`, `scripts/parity_check.py`, `scripts/same_runner_bench.py`.
+- Kept: Rust sources and tests, archetype and `parity/fixtures` samples, `bench/*.json`, `tests/goldens/`, npm packages, `install.sh`, `install.ps1`, `server.json`, `schemas/`, release workflow. `data/patterns.json` moved out of `trammel/data/` because `src/implicit.rs` embeds it. `tests/npm_packages.rs` keeps the npm layout checks that used to live in `tests/test_npm_packages.py`.
+- CI parity job removed. It installed the Python package. `scripts/bench_gate.py` stays. It times the Rust binary against recorded floors and does not import the package.
+- Docs now describe the binary and the npm package. One line in each user-facing doc points at `python-legacy`.
 
 ---
 

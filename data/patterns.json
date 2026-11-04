@@ -1,5 +1,5 @@
 {
-  "_comment": "Externalized pattern configuration used by trammel.implicit_deps_engines and trammel.recipe_fingerprints. Edit in place to tune inference without code changes; schema is validated on load (see trammel/pattern_config.py).",
+  "_comment": "Implicit-edge rules embedded by src/implicit.rs. Edit in place to tune inference. Only naming_convention_rules and infrastructure_patterns are read.",
 
   "naming_convention_rules": {
     "Service":     [["Model", 0.9], ["Route", 0.85], ["Utils", 0.7]],

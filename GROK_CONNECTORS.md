@@ -2,35 +2,33 @@
 
 This project is ready for Grok Connectors (Bring Your Own MCP) and Grok Build.
 
-The MCP server is designed to work with any MCP-compatible client, including future Grok Build local agents and remote MCP connections in Grok.
+The MCP server is the std-only Rust binary. It works with any MCP client, including Grok Build local agents and remote MCP connections in Grok.
+
+The old Python version lives on the `python-legacy` branch.
 
 ## For Grok Connectors (BYO MCP)
 
 When Grok supports adding custom MCP servers:
 
-1. Start the server locally (example for this project):
-   ```bash
-   python -m trammel.mcp_server --port 8737
-   ```
-   Or use stdio mode for local agents if available.
+1. Start the server locally:
 
-2. For remote access from Grok, expose the HTTP endpoint over HTTPS using a secure tunnel (e.g., Cloudflare Tunnel, ngrok).
+   ```bash
+   trammel mcp
+   ```
+
+   `trammel-mcp` is the same server with no arguments. Install with `npm i -g @iron_adamant/trammel`.
+
+2. For remote access from Grok, expose the endpoint over HTTPS using a secure tunnel (for example Cloudflare Tunnel).
 
 3. Add to Grok Connectors / remote MCP config:
    - **server_url**: `https://your-https-tunnel/mcp` (or the specific MCP endpoint)
    - **server_label**: `trammel`
-   - **server_description**: "Planning and execution harness for LLM-assisted coding: dependency-aware decomposition, beam strategy, verification, and recipe memory"
+   - **server_description**: "Planning harness for coding agents: dependency-aware decomposition, beam strategy, verification, and recipe memory"
 
-The server implements MCP tools for planning, task management, and verification. Grok will discover the tools automatically.
+Grok discovers the tools from the server. The default list is 12 primary tools. `TRAMMEL_MCP_SURFACE=all` lists all 32.
 
 ## For Grok Build (Local)
 
-Once Grok Build is available:
-- Use the MCP server alongside Grok Build agents for systematic planning, verification, and safe execution of complex refactors and rebuilds.
-- The project provides dependency-aware task graphs and incremental verification that integrate naturally with autonomous agent workflows.
+Use the MCP server alongside Grok Build agents for planning, verification, and multi-step refactors. The project provides dependency-aware task graphs and incremental verification.
 
-No changes to your existing workflows are required. This project was built to be backend-agnostic and work with any LLM/IDE/CLI via MCP.
-
-See README.md for full setup.
-
-For questions or to contribute Grok-specific adapters, open an issue.
+See README.md for install and `SYSTEM_PROMPT.md` for the tool loop.
