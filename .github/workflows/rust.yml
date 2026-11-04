@@ -26,27 +26,6 @@ jobs:
       - name: Syntax core manifest
         run: python scripts/check_syntax_core.py
 
-  parity:
-    name: parity against Python 3.15.3
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.99.1
-      - name: Install Python package
-        run: python -m pip install -e .
-      - name: Release binary
-        run: cargo build --release --locked
-      - name: Parity
-        shell: bash
-        run: python scripts/parity_check.py "target/release/trammel${{ runner.os == 'Windows' && '.exe' || '' }}"
-
   bench-rule:
     name: benchmark regression rule
     runs-on: ubuntu-latest

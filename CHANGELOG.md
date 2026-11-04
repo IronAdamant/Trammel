@@ -1,6 +1,10 @@
 # Changelog
 
-Older releases are recorded in `README.md` (Full Changelog) and `LLM_Development.md`.
+The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in `README.md` (Full Changelog) and `LLM_Development.md`.
+
+## 4.0.0
+
+Rust binary and npm packages `@iron_adamant/trammel` and `@iron_adamant/trammel-<os>-<arch>`. Store is `.trammel/`. MCP surface is 32 tools. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. Releases are GitHub Release binaries plus npm. There is no PyPI publish from this tree.
 
 ## 3.15.3
 

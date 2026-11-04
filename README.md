@@ -1,48 +1,53 @@
-# Trammel — AI Task Planner for Coding Assistants
+# Trammel
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![PyPI](https://img.shields.io/pypi/v/trammel)](https://pypi.org/project/trammel/)
+[![npm](https://img.shields.io/npm/v/%40iron_adamant%2Ftrammel)](https://www.npmjs.com/package/@iron_adamant/trammel)
 
-**Trammel helps AI coding assistants plan, verify, and remember multi-step tasks.**
+**Trammel helps coding agents plan, verify, and remember multi-step tasks.**
 
-Instead of letting your AI assistant wing it on complex changes, Trammel breaks goals into ordered steps, verifies each one works, learns from failures, and saves successful strategies for reuse. It works with **Claude Code**, **Cursor**, and any MCP-compatible editor — or standalone via Python and CLI.
+It breaks a goal into ordered steps, checks each step, learns from failures, and stores a successful strategy as a recipe. Version 4.0.0 is one std-only Rust binary. The commands are `trammel` and `trammel-mcp`.
 
-> Trammel is a tool **for** LLMs, not a tool that calls LLMs. It provides the planning discipline that coding assistants need to tackle multi-step tasks reliably.
+The old Python version lives on the `python-legacy` branch.
+
+> Trammel is a tool for LLMs, not a tool that calls LLMs.
 
 ![Trammel Plan & Explore Demo](docs/demo-plan-explore.png)
 
-## What It Does
+## What it does
 
-- **Breaks down goals into steps** — Analyzes your project's code structure, figures out what depends on what, and creates an ordered plan
-- **Tries multiple approaches** — Explores different strategies in parallel (bottom-up, top-down, risk-first, and more) to find what works best
-- **Verifies as it goes** — Runs your tests after each step in an isolated temp copy so bad changes don't pile up. Both the Python harness and the MCP `verify_step` tool execute the real test suite in isolation; `verify_step` also returns static analysis, preflight syntax checks, and import-integrity results alongside the test outcome.
-- **Learns from mistakes** — Records what failed and why, then blocks the same mistake from happening again
-- **Remembers what worked** — Saves successful strategies as reusable recipes, so similar tasks get solved faster next time
-- **Coordinates multiple agents** — Provides step claiming, dependency tracking, and DAG metrics for multi-agent workflows
+- Breaks a goal into steps from the project's imports and symbols
+- Tries nine orderings (bottom-up, top-down, risk-first, and the rest)
+- Verifies an edit in an isolated copy, then runs the project's test command
+- Records a failure as a constraint so the same mistake is skipped later
+- Stores a successful strategy as a recipe
+- Coordinates several agents with step claims
 
-**15 languages supported:** Python, TypeScript, JavaScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig
+**15 languages:** Python, TypeScript, JavaScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig.
 
 ## Installation
-
-```bash
-pip install trammel            # core library (no dependencies beyond Python stdlib)
-pip install trammel[mcp]       # MCP server; allows MCP Python SDK 1.x and 2.x (`mcp>=1.0.0,<3`)
-```
-
-Rust 4.0.0 is the npm package `@iron_adamant/trammel`. A global install puts the commands `trammel` and `trammel-mcp` on `PATH`.
 
 ```bash
 npm i -g @iron_adamant/trammel
 npx @iron_adamant/trammel
 ```
 
-Or from source:
+A global install puts `trammel` and `trammel-mcp` on `PATH`. The wrapper is `@iron_adamant/trammel`. The binary for this machine is one of the six `@iron_adamant/trammel-<os>-<arch>` packages.
+
+From a GitHub Release, without npm:
 
 ```bash
-git clone https://github.com/IronAdamant/Trammel.git
-cd Trammel && pip install -e '.[mcp]'
+sh install.sh          # Linux or macOS, into ~/.local/bin
+# Windows: install.ps1 into %LOCALAPPDATA%\trammel\bin
 ```
+
+From this checkout:
+
+```bash
+cargo build --release
+# binaries: target/release/trammel and target/release/trammel-mcp
+```
+
+The Rust crate has no dependencies. `[dependencies]` in `Cargo.toml` stays empty.
 
 ## Benchmarks
 
@@ -87,11 +92,11 @@ The same-runner columns are `bench/same_runner.json`, measured 2026-11-03 on Lin
 
 `tools/list` payload, one measurement of the JSON line: Python primary 12,508 bytes and 12 tools, Python all 23,515 bytes and 33 tools, Rust primary 3,340 bytes and 12 tools, Rust all 8,777 bytes and 32 tools. This x86_64 release build is `trammel` 2,131,840 bytes and `trammel-mcp` 2,032,264 bytes. The CI floor in `scripts/bench_gate.py` fails a build whose `--version`, `--help`, or MCP `initialize` median is at or above the recorded Python median. The regression rule (an A/A run passes, an injected slowdown fails, no percentage tolerance) is `cargo test --lib benchstat`.
 
-## Quick Start
+## Quick start
 
-### With Claude Code or Cursor (MCP)
+### MCP
 
-Add to your `.claude/.mcp.json` (Claude Code) or equivalent MCP config:
+`trammel-mcp` speaks stdio. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
 
 ```json
 {
@@ -104,164 +109,99 @@ Add to your `.claude/.mcp.json` (Claude Code) or equivalent MCP config:
 }
 ```
 
-Your AI assistant now has access to 31 planning tools — decompose goals, create plans, claim steps, verify work, save recipes, and prune stale plans. See `SYSTEM_PROMPT.md` for the full orchestration guide.
+The default listing is 12 primary tools. Set `TRAMMEL_MCP_SURFACE=all` to list all 32. `record_step` and `create_plan` return `tool_removed`. See `SYSTEM_PROMPT.md` and `docs/LLM_CONTRACT.md`.
 
-### From the Command Line
+### Command line
+
+JSON on stdout. `--human` prints indented JSON.
 
 ```bash
-python -m trammel "refactor auth module" --root /path/to/project --beams 3
-python -m trammel "fix tests" --test-cmd "pytest -x -q"
-python -m trammel "explore auth" --dry-run          # explore strategies without verification
-python -m trammel "fix auth" --root /monorepo --scope services/auth
+trammel doctor
+trammel "refactor auth module" --root /path/to/project --beams 3
+trammel "fix tests" --test-cmd pytest -x -q
+trammel "explore auth" --dry-run
+trammel decompose --goal "update shared helpers" --project-root .
+trammel start_plan --goal "update shared helpers" --project-root .
+trammel mcp
 ```
 
-### From Python
+`trammel migrate` reads an old `trammel.db` (and its WAL) and writes `.trammel/`. The source file is left in place.
 
-```python
-from trammel import plan_and_execute, explore, synthesize
+## How it works
 
-# Full pipeline: decompose → plan → explore → verify → store recipe
-result = plan_and_execute("your goal", "/path/to/project", num_beams=3)
+1. **Decompose.** Build a dependency graph and an ordered list of steps.
+2. **Explore.** Run the nine beam orderings and keep the one you want.
+3. **Verify.** Copy the project, apply the edit, run a preflight, then the test command.
+4. **Constrain.** Store the failure so the next plan skips that approach.
+5. **Remember.** Save the strategy. Later goals are matched by text, files, and success ratio.
 
-# Explore only (no verification)
-strategy = explore("refactor auth", "/path/to/project")
+State lives in `.trammel/` next to the project. `trammel doctor` prints the store path, languages, protocols, and the next useful command.
 
-# Save a verified strategy as a reusable recipe
-synthesize("refactor auth", verified_strategy)
+## Surfaces
+
+| Surface | Use |
+|---------|-----|
+| `trammel-mcp` | Claude Code, Cursor, and any MCP client |
+| `trammel <tool>` | The same 32 tools, JSON on stdout |
+| `trammel GOAL` | Decompose, verify, and store in one run |
+| `.trammel/` | Plans, steps, constraints, recipes |
+
+## Several agents
+
+`claim_step`, `release_step`, and `available_steps` share one store. A claim expires after 10 minutes. Scaffold plans also report `max_parallelism`, `layer_widths`, and `critical_path_length`.
+
+## Stele and Chisel
+
+Trammel works on its own. With [Stele](https://github.com/IronAdamant/stele-context) and [Chisel](https://github.com/IronAdamant/Chisel), the three meet at the MCP layer. There is no crate dependency between them.
+
+## Configuration
+
+Project config is `.trammel.json`. A `[tool.trammel]` table in that project's `pyproject.toml` is read when `.trammel.json` is absent. This repository does not ship a `pyproject.toml`.
+
+```json
+{
+  "default_scope": "src/",
+  "focus_keywords": ["auth", "login"],
+  "max_files": 50,
+  "test_cmd": ["cargo", "test"]
+}
 ```
 
-## How It Works
+Test command order: the caller's `--test-cmd` or `test_cmd` argument, then the project file, then the language default.
 
-Trammel treats planning as a structured search problem:
+`export_plan` writes `format=trammel.plan`, `format_version=1`.
 
-1. **Decompose** — Analyzes imports and builds a dependency graph, then generates ordered steps with rationale. Supports scaffold definitions for new files that don't exist yet.
-2. **Explore** — Creates multiple strategy variants (bottom-up, top-down, risk-first, critical-path, cohesion, minimal-change, and more) and runs them in parallel.
-3. **Verify** — Applies edits in isolated temp copies and runs tests per-step. Extracts structured failure analysis when something breaks.
-4. **Constrain** — Records failure reasons as persistent constraints that prevent the same mistake across sessions.
-5. **Remember** — Stores successful strategies as recipes, retrieved later by text similarity + file overlap + success ratio.
-
-All state lives in a local SQLite database (`trammel.db`) — plans, steps, constraints, recipes, and telemetry.
-
-## Integration Options
-
-Trammel doesn't require MCP. The same capabilities are available through multiple surfaces:
-
-| Surface | Best for |
-|---------|----------|
-| **MCP server** (`trammel-mcp`) | Claude Code, Cursor, and other MCP-aware editors |
-| **Python API** (`plan_and_execute`, `explore`, etc.) | Scripts, CI pipelines, custom orchestrators |
-| **CLI** (`python -m trammel`) | Shell automation, quick one-off plans |
-| **SQLite** (`trammel.db`) | Direct queries, external dashboards, cross-process coordination |
-
-## Multi-Agent Support
-
-When decomposing with a scaffold, Trammel returns DAG metrics for dispatching work across multiple agents:
-
-| Metric | What it tells you |
-|--------|-------------------|
-| `max_parallelism` | Peak number of agents you can run at once |
-| `layer_widths` | How many files can be worked on per round (e.g. `[7, 12, 6, 10, 3, 2]`) |
-| `critical_path_length` | The longest chain — your minimum number of rounds |
-
-Agents coordinate via `claim_step` / `release_step` / `available_steps`. Claims auto-expire after 10 minutes for stale agent recovery.
-
-## Works With Stele and Chisel
-
-Trammel works standalone. When co-installed with [Stele](https://github.com/IronAdamant/stele-context) (context retrieval) and [Chisel](https://github.com/IronAdamant/Chisel) (code analysis), all three cooperate through the MCP tool layer — no cross-dependencies between packages.
-
-| Tool | Role |
-|------|------|
-| **Stele** | Persistent context retrieval and semantic indexing |
-| **Chisel** | Code analysis, churn, coupling, risk mapping |
-| **Trammel** | Planning, verification, failure learning, recipe memory |
-
-## Plan Fidelity and Configuration
-
-Trammel has controls to keep plans accurate and sub-agents aligned:
-
-- **`strict_greenfield`** — Fails decomposition if a new-work goal has no scaffold, preventing vague improvised plans
-- **`relevant_only`** — Filters steps to only what matters for the goal
-- **Relevance tiers** — Each step gets `high` / `medium` / `low` relevance so prioritization is transparent
-
-Optional project config via `pyproject.toml` (`[tool.trammel]` section) or `.trammel.json`:
-
-```toml
-[tool.trammel]
-default_scope = "src/"
-focus_keywords = ["auth", "login"]
-max_files = 50
-test_cmd = ["pytest", "-x", "-q"]   # used by verify_step / plan_and_execute when no explicit override
-```
-
-**Test command precedence:** explicit caller/`--test-cmd` → project `test_cmd` → language analyzer default (e.g. unittest discover).
-
-**Plan export for non-MCP runners:** `export_strategy` / `export_plan` (Python), CLI `--export PATH`, or MCP `export_plan` write versioned JSON (`format=trammel.plan`, `format_version=1`) with goal, steps + `depends_on`, strategy, and dependency graph.
-
-## Project Layout
+## Layout
 
 ```
-trammel/              Importable package
-  __init__.py         Public API: plan_and_execute, explore, synthesize, export_*
-  core.py             Planner: decomposition, constraints, step generation
-  store.py            RecipeStore: SQLite persistence (15 tables), telemetry
-  store_recipes.py    Recipe methods: save, retrieve, list, prune
-  strategies.py       9 built-in beam strategies
-  harness.py          Execution harness: temp copies, test runner
-  export.py           Versioned plan/strategy JSON for external runners
-  project_config.py   Config merging + resolve_test_cmd (pyproject / .trammel.json)
-  analyzer_specs.py   Declarative regex specs (SPEC_REGISTRY: 12 entries)
-  analyzer_engine.py  RegexAnalyzerEngine + import resolvers + backward-compat shims
-  analyzers.py        Python + TypeScript analyzers, language detection
-  cli.py              CLI entry point (--export, --test-cmd)
-  mcp_server.py       MCP tool schemas and dispatch (33 tools)
-  mcp_stdio.py        MCP stdio server entry point
-  plan_merge.py       Plan merging engine: conflict detection + 4 resolution strategies
-  store_agents.py     Multi-agent coordination: step claiming, availability, proximity warnings
-tests/                unittest suite (stdlib)
-SYSTEM_PROMPT.md      Reference orchestration guide for LLM clients
+src/                  Rust library and the trammel / trammel-mcp binaries
+schemas/              One JSON schema per MCP tool
+data/patterns.json    Implicit-edge rules, embedded at compile time
+tests/                Rust tests, archetype fixtures, decompose golden
+parity/fixtures/      Small multi-language samples used by the parser tests
+npm/                  @iron_adamant/trammel wrapper and six platform packages
+bench/                Recorded Python and Rust timings
+scripts/              Zero-dependency, marker, syntax-core, and bench-floor checks
 ```
-
-## SQLite Schema (`trammel.db`)
-
-| Table | Purpose |
-|-------|---------|
-| `recipes` | Successful strategies with pattern, constraints, success/failure counts |
-| `recipe_trigrams` | Inverted trigram index for fast recipe retrieval |
-| `recipe_files` | File paths for structural matching (Jaccard overlap) |
-| `plans` | Goals + strategy snapshots + scaffold with step progress |
-| `steps` | Work units with dependencies, rationale, verification results |
-| `constraints` | Failure records that prevent known-bad repetition |
-| `trajectories` | Run logs per beam: outcome, steps completed, failure reason |
-| `failure_patterns` | Historical failure signatures with resolution history |
-| `usage_events` | Telemetry: tool calls, recipe hit rates, strategy win rates |
-| `scaffold_recipes` | Reusable scaffold patterns with role counts and success/failure |
-| `scaffold_trigrams` | Trigram index for scaffold-recipe retrieval |
-| `recipe_terms` | Inverted word index for TF-IDF recipe lookup |
-| `recipe_signatures` | MinHash signatures for approximate recipe matching |
-| `recipe_arch_signatures` | MinHash signatures of architecture shape |
-| `recipe_index_meta` | Recipe-index bookkeeping |
 
 ## Contributing
 
-Contributions welcome. Please open an issue first to discuss changes.
+The crate stays dependency-free. `Cargo.lock` may name only `trammel`.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Make your changes (core must remain stdlib-only; tests use `unittest` only)
-4. Run tests: `python -m unittest discover -q -s tests -p 'test_*.py'`
-   (CI also runs this on Python **3.10–3.13** on Ubuntu and macOS; feature tests that need newer syntax should use `@unittest.skipUnless` / `skipIf`)
-5. Open a pull request
+```bash
+cargo test --locked
+python scripts/check_zero_deps.py
+python scripts/check_no_todos.py
+python scripts/check_syntax_core.py
+```
 
-## Publishing (Maintainers)
+CI runs those on Linux, macOS, and Windows. The benchmark job checks the regression rule and that startup stays under the recorded Python floors in `scripts/bench_gate.py`.
 
-Releases use **Trusted Publishing** (GitHub OIDC → PyPI). No API tokens needed.
+## Publishing
 
-1. Bump `version` in `pyproject.toml`
-2. Run tests, commit, push to `main`
-3. Tag: `git tag -a vX.Y.Z -m "Release X.Y.Z" && git push origin vX.Y.Z`
-4. Create GitHub Release (triggers PyPI publish automatically)
+A `v*` tag runs `.github/workflows/release.yml`. That workflow builds six binaries (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64), uploads them with `SHA256SUMS`, then publishes the npm packages. `workflow_dispatch` with a `tag` input republishes an existing release and does not rebuild. `scripts/release.sh` only checks `Cargo.toml` and prints the tag command. It does not publish.
 
----
+Python release notes below 4.0.0:
 
 <details>
 <summary><strong>Full Changelog</strong></summary>

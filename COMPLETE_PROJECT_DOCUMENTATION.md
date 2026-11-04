@@ -1,239 +1,299 @@
-# Trammel — Project documentation index
+# Trammel: project documentation index
 
-**Updated:** 2026-11-03
-**Version:** Python 3.15.3, Rust rewrite 4.0.0 (unreleased)
-**Purpose:** Stdlib-only planning harness: dependency-aware decomposition (15 languages: Python, TypeScript, JavaScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig), parallel beam execution (9 strategies), typed symbol analysis, incremental verification, failure constraint propagation, structural recipe matching (with abbreviation expansion, stable content-addressed sig), recipe pruning, SQLite persistence (15 tables), **implicit dependency inference** (naming conventions, shared state, pattern learning). MCP server (33 tools, 12 primary by default) for LLM integration with reference system prompt. Regex specs live in `SPEC_REGISTRY` (12 entries). PEP 561 typed (`py.typed` marker). **v3.12.1** fixes the Python 3.14 SQLite transaction-nesting bug, hardens `get_plan` against corrupt strategy_json, makes `explore` scope-aware, deduplicates `recipe_files`, and adds `prune_plans`. **v3.12.0** split every module under 500 LOC (14 new modules, same public API) and externalized naming/role patterns to `data/patterns.json`.
+**Updated:** 2026-11-04
+**Version:** 4.0.0 (Rust binary and npm). The old Python version lives on the `python-legacy` branch.
+**Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 32 MCP tools, 12 primary. Store is `.trammel/`.
 
-## Root files
+## Removed from main
 
-| Path | Purpose |
-|------|---------|
-| `README.md` | Overview, quickstart, CLI, MCP setup, architecture, version notes |
-| `COMPLETE_PROJECT_DOCUMENTATION.md` | This file: inventory and data flows |
-| `LLM_Development.md` | Chronological change log |
-| `pyproject.toml` | Package metadata (`trammel` 3.15.3), `requires-python >=3.10`, optional `mcp>=1.0.0,<3`, console scripts `trammel` + `trammel-mcp`. Package data now includes `data/*.json`. |
-| `SYSTEM_PROMPT.md` | Reference orchestration guide for LLM clients: plan-verify-store loop |
+These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 
-## `.github/workflows/`
+| Path | Why it left main |
+|------|------------------|
+| `trammel/` | Python package. `data/patterns.json` moved to `data/` first, because the Rust binary embeds it. |
+| `tests/test_*.py`, `tests/__init__.py` | Python unittest suite. Archetype fixtures and Rust tests stayed. npm checks moved to `tests/npm_packages.rs`. |
+| `pyproject.toml` | Python package metadata. User projects may still have their own. The binary reads `[tool.trammel]` from those. |
+| `.github/workflows/ci.yml` | Python 3.10-3.13 unittest matrix. |
+| `.github/workflows/publish.yml` | PyPI trusted publishing. This tree publishes npm from `release.yml`. |
+| `scripts/parity_check.py` | Imported the Python package to compare decompose output. The golden file stayed. |
+| `scripts/same_runner_bench.py` | Re-ran the Python package for timings. `bench/same_runner.json` stayed. |
+| `docs/wiki/export.py.wiki.md` | Notes for the deleted `trammel/export.py`. Export now lives in `src/export.rs`. |
 
-| Path | Purpose |
-|------|---------|
-| `ci.yml` | Tests on push/PR to `main` (Python 3.10–3.13 on Ubuntu and macOS). Python 3.12 also runs a fresh-venv MCP handshake. |
-| `rust.yml` | `cargo test` on Linux, macOS, and Windows; Python parity; zero-dependency check; benchmark rule. |
-| `publish.yml` | On **publish**ed GitHub Release: build sdist/wheel, `unittest`, upload to PyPI via **OIDC Trusted Publishing** (`environment: release`; no PyPI token in secrets). |
+## Kept on purpose
 
-## wiki-local/
+| Path | Why |
+|------|-----|
+| `src/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | The product. |
+| `tests/*.rs`, `tests/archetypes/`, `tests/goldens/` | Rust tests and the decompose golden. |
+| `parity/fixtures/`, `parity/goldens/` | Parser tests read these files. |
+| `schemas/`, `server.json`, `npm/`, `install.sh`, `install.ps1` | MCP schemas, registry id, npm layout, release installers. |
+| `.github/workflows/release.yml` | Six binaries, GitHub Release, npm. `workflow_dispatch` republishes an existing tag. |
+| `.github/workflows/rust.yml` | Linux, macOS, and Windows `cargo test`, plus the bench rule. The Python parity job was removed. |
+| `scripts/check_*.py`, `scripts/bench_gate.py`, `scripts/syntax_core_manifest.txt`, `scripts/release.sh` | Rust CI gates. They do not import a Python package. |
+| `bench/` | Recorded timings. |
+| `data/patterns.json` | Compile-time input for implicit edges. |
 
-| Path | Purpose |
-|------|---------|
-| `wiki-local/index.md` | Wiki hub; links to spec, glossary, root docs |
-| `wiki-local/spec-project.md` | Technical spec: API, schema, planner/harness/store behavior |
-| `wiki-local/glossary.md` | Named concepts (beam, recipe, strategy, harness, constraint, ...) |
-
-## Package `trammel/`
-
-Every module is under 500 LOC after the v3.12.0 split. The table groups related files (`store_*`, analyzer `_resolvers`/`_engine`, scaffold `_creation`/`_validation`, etc.) together to make the new layout discoverable. Public imports are unchanged — legacy modules re-export moved symbols.
-
-### Entrypoints
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/__init__.py` | `__version__` (from `importlib.metadata`), `plan_and_execute` (parallel beams via `ProcessPoolExecutor`), `explore`, `synthesize`; exports `PythonAnalyzer`, `TypeScriptAnalyzer`, `GoAnalyzer`, `RustAnalyzer`, `CppAnalyzer`, `JavaAnalyzer`, `CSharpAnalyzer`, `DartAnalyzer`, `PhpAnalyzer`, `RubyAnalyzer`, `SwiftAnalyzer`, `ZigAnalyzer`, `detect_language`, `get_analyzer`; **`ImplicitDependencyGraphEngine`**, **`NamingConventionEngine`**, **`SharedStateDetector`**, **`PatternLearner`**; `_run_beam` and `_run_beams_parallel` helpers. | `core`, `harness`, `store`, `analyzers`, `concurrent.futures` |
-| `trammel/__main__.py` | `python -m trammel` → `cli.main()`. | `cli` |
-| `trammel/cli.py` | Argparse + JSON stdin; `--version`, `--root`, `--beams`, `--db`, `--test-cmd`, `--dry-run`, `--language`, `--scope`. Validates `--root` directory exists. JSON payload type-validated (must be dict). | `__init__` |
-
-### Planner (`core.py` + helpers)
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/core.py` | `Planner` class with `decompose()` and `explore_trajectories()` (thin delegation to `planner_helpers`). Orchestrates recipe lookup, constraint application, scaffold validation, implicit-dep inference, scaffold vs. full-repo decomposition. Public docstrings on every Planner method. **3.12.1** added `_scaffold_matches_scope()` (rejects scaffold-recipe matches whose files all live outside the queried scope) and lifted `trammel_blind_spots` to a top-level field on the `decompose` result. ~510 LOC. | `planner_helpers`, `store`, `strategies`, `scaffold_logic`, `scoring`, `goal_nlp`, `constraints`, `implicit_deps` |
-| `trammel/planner_helpers.py` | Extracted free functions used by `Planner`: `decompose_scaffold_only(planner, ...)`, `explore_trajectories(planner, ...)`, `suggest_strategy(store, goal, language)`. Keeps `core.py` under 500 LOC and makes the scaffold-only pipeline reusable from tests. ~234 LOC. | `scaffold_logic`, `strategies`, `goal_nlp`, `constraints`, `utils` |
-| `trammel/scoring.py` | Step generation, relevance scoring (`_dep_indegree_stats`, `_score_relevance`, `_relevance_tier`), path filtering by globs. | `utils`, `goal_nlp` |
-| `trammel/goal_nlp.py` | Goal text analysis: `_extract_goal_keywords`, `_extract_paths_from_goal`, `_has_creation_intent`, `_has_refactor_intent`, keyword variant helpers, ambiguity scoring. | stdlib |
-| `trammel/constraints.py` | Constraint propagation: `_parse_constraints`, `_mark_avoided`, `_inject_orderings`, `_mark_incompatible`, `_add_prerequisites`. | stdlib |
-| `trammel/strategies.py` | Beam strategy registry and 9 built-in orderings: `bottom_up`, `top_down`, `risk_first`, `critical_path`, `cohesion`, `minimal_change`, `leaf_first`, `hub_first`, `test_adjacent`. `register_strategy`/`get_strategies` API. ~275 LOC. | `utils` |
-| `trammel/project_config.py` | Loads `.trammel.json` / `[tool.trammel]` project config (default_scope, focus_keywords, focus_globs, max_files) and merges with per-call overrides. | stdlib |
-
-### Scaffold pipeline
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/scaffold_logic.py` | Scaffold DAG helpers (`_declared_scaffold_graph`, `_scaffold_target_paths`, `_scaffold_has_entries`, `_existing_paths_for_scaffold`), `_scaffold_steps`, `_scaffold_rationale`, `strategy_to_scaffold()`. Re-exports creation helpers from `scaffold_creation.py` and validation helpers from `scaffold_validation.py` so existing imports keep working. | `scaffold_creation`, `scaffold_validation`, `utils` |
-| `trammel/scaffold_creation.py` | **New in 3.12.0.** Goal→scaffold heuristic pipeline extracted from `scaffold_logic.py`: `_infer_file_name`, `_sibling_convention_clones`, `_fallback_directories`, `_directories_for_role_hints`, `_detect_layered_architecture`, `_creation_hints`, `_generate_creation_steps`. Constants `_ROLE_DIR_SUBSTRINGS`, `_FALLBACK_ROLE_DIRS`, `_LAYER_DIRS`, `_LAYER_PATTERNS`. ~494 LOC. | `goal_nlp`, `scaffold_templates` |
-| `trammel/scaffold_validation.py` | **New in 3.12.0.** `compute_scaffold_dag_metrics()` (node/edge counts, critical-path length, layer widths, max parallelism; cycle-safe) and `validate_scaffold()` (detects cycles, duplicates, self-reference, over-constrained nodes, missing deps). Extracted from `utils.py`; re-exported there for back-compat. | stdlib |
-| `trammel/scaffold_templates.py` | Scaffold template registry and domain inference for greenfield scaffolding. | `goal_nlp`, `utils` |
-
-### Execution harness
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/harness.py` | `ExecutionHarness` with `verify_step()`, `run_incremental()` (O(K) via persistent base copy), configurable `test_cmd`, failure analysis. `prepare_base(project_root)` + `run_from_base(edits, base_dir)` avoids re-filtering per beam. Accepts optional `analyzer` for language-specific test commands and error patterns. Static analysis (`_static_analysis`) + dry-run test-cmd probing. Class docstring + `__init__` docstring added in 3.12.0. ~435 LOC. | `utils`, `shutil` |
-
-### Store (SQLite, split mixins)
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/store.py` | `RecipeStore` class composing 6 mixins: `RecipeStoreMixin`, `RecipeRetrievalMixin`, `ScaffoldRecipeMixin`, `PlanStoreMixin`, `TelemetryMixin`, `AgentStoreMixin`. Owns schema init (`_init_schema`) and the context-manager lifecycle. Full-class docstring added in 3.12.0. **3.12.1** added `_dedupe_recipe_files()` (one-shot cleanup + unique index on `(recipe_sig, file_path)`) called from `_init_schema`. ~333 LOC. | all `store_*` mixins, `utils` |
-| `trammel/store_recipes.py` | `RecipeStoreMixin`: recipe CRUD — `save_recipe` (stable sig via `_stable_strategy_sig`, strips volatile `_source` / `analysis_meta` before hashing), `search_recipes_by_trigrams`, `list_recipes`, `prune_recipes`, `validate_recipes`, `_ensure_scaffold_create_steps`. Composite scoring weights `_W_TEXT/_W_FILES/_W_SUCCESS/_W_RECENCY/_W_STRUCTURAL`. **3.12.1** switched `_insert_file_entries` to `INSERT OR IGNORE` (against the new unique index on `recipe_files`) and de-duplicates the file list returned by `list_recipes`. ~375 LOC (down from 1223 LOC pre-3.12.0). | `recipe_fingerprints`, `recipe_index`, `utils` |
-| `trammel/store_retrieval.py` | **New in 3.12.0.** `RecipeRetrievalMixin`: `retrieve_best_recipe()` and `retrieve_near_matches()` — composite-scored candidate retrieval unioning term / trigram / MinHash / arch-MinHash indices, with scaffold penalty and structural-fingerprint boost when `context_files` provided. ~286 LOC. | `recipe_fingerprints`, `utils` |
-| `trammel/store_scaffolds.py` | **New in 3.12.0.** `ScaffoldRecipeMixin`: separate schema (`scaffold_recipes`, `scaffold_trigrams`) + CRUD for scaffold recipes — `save_scaffold_recipe`, `retrieve_best_scaffold_recipe` (matches via role-vector + DAG fingerprint), `_init_scaffold_schema`, `_rebuild_scaffold_trigram_index`. ~217 LOC. | `recipe_fingerprints`, `utils` |
-| `trammel/store_plans.py` | **New in 3.12.0.** `PlanStoreMixin`: plan + step management — `create_plan` (with cycle detection via `_validate_plan_steps`), `get_plan`, `update_plan_status`, `list_plans`, `merge_plans` (wrapper around `plan_merge`), `update_step`, `update_steps_batch`, `get_step`, `get_plan_progress`, `complete_plan` (batch-finalize + recipe save). Module-level `_STEP_COLUMNS` and `_step_to_dict()`. **3.12.1** added `_safe_json()` so corrupt strategy/scaffold/step JSON cells return a synthetic payload + `_corrupted_fields` rather than raising, plus `prune_plans(max_age_days, status)` that cascade-deletes stuck plans + their steps/trajectories/constraints. ~410 LOC. | `plan_merge`, `utils` |
-| `trammel/store_telemetry.py` | **New in 3.12.0.** `TelemetryMixin`: `record_failure_pattern`, `resolve_failure_pattern`, `get_failure_history`, `get_status_summary`, `log_event` (fire-and-forget, sqlite3.Error-narrowed), `get_usage_stats` (tool-call counts, recipe hit/miss rates, Laplace-smoothed strategy win rates). ~139 LOC. | `utils` |
-| `trammel/store_agents.py` | `AgentStoreMixin`: multi-agent step coordination — `claim_step` (rejects non-pending, proximity warnings), `release_step`, `available_steps`, `_is_claimed_by_other`, `_CLAIM_TIMEOUT` stale-claim expiry. | `utils` |
-| `trammel/recipe_index.py` | Zero-dep inverted word index (`recipe_terms`), MinHash LSH (`recipe_signatures`), arch-MinHash (`recipe_arch_signatures`), trigram index. Methods: `index_recipe`, `search_recipes_by_terms`, `search_recipes_by_minhash`, `search_recipes_by_arch`, `_minhash_signature`. **3.12.1** wrapped `backfill_recipe_index` in an explicit `transaction()` so its DML can no longer leak an implicit Python transaction that would break later writes. ~212 LOC. | stdlib |
-| `trammel/recipe_fingerprints.py` | **New in 3.12.0.** Structural fingerprinting helpers extracted from `store_recipes.py`: `strategy_fingerprint`, `structural_similarity`, `goal_fingerprint_from_text`, `scaffold_fingerprint`, `scaffold_structural_similarity`, `goal_scaffold_fingerprint_from_text`, `is_scaffold_pattern`, `recipe_match_components`, `sql_in`. `_FILE_ROLE_RE` / `_GOAL_ROLE_RE` compiled at import from `data/patterns.json`. ~385 LOC. | `pattern_config`, `text_similarity`, `utils` |
-| `trammel/plan_merge.py` | Plan-merging engine. `detect_conflicts(plan_a, plan_b)` checks file overlap, action clash, dependency inversion, cycle introduction. `merge_plans(plan_a, plan_b, strategy)` supports `sequential`, `interleave`, `priority`, `unified` strategies. Exposed via the `merge_plans` MCP tool. | `utils` |
-
-### MCP surface
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/mcp_server.py` | Dispatch layer: `dispatch_tool(store, tool_name, arguments)` plus one `_handle_*` per MCP tool (33 handlers). **3.12.1** added `_handle_prune_plans` and made `_handle_get_recipe` return `near_match_recipes` on misses for parity with `explore`. Later tools include `export_plan` and `start_plan`. Re-exports `_TOOL_SCHEMAS` / `_LANGUAGES` / `_TOOL_CATEGORIES` for backward compatibility. `_validate_registries()` asserts schema↔dispatch and language↔analyzer parity at import. ~415 LOC. | `tool_schemas`, `core`, `harness`, `store` |
-| `trammel/tool_schemas.py` | **New in 3.12.0.** JSON Schema definitions for all 33 MCP tools, plus `TOOL_CATEGORIES` (planning / execution / memory / coordination / telemetry), `PRIMARY_TOOLS` (12 names advertised by default), and `coerce_int_params()` (schema-driven string→int coercion for MCP clients that serialize ints as strings). Split from `mcp_server.py` to keep both under 500 LOC. ~365 LOC. | stdlib |
-| `trammel/mcp_stdio.py` | MCP stdio server entry point (`trammel-mcp` console script). Speaks MCP Python SDK 1.x (decorator registration) and 2.x (`on_list_tools` / `on_call_tool`). Reports Trammel's version. Tool failures return `isError: true`. Per-call `RecipeStore` inside `asyncio.to_thread` worker — avoids cross-thread SQLite connection sharing (Python 3.14 enforces `check_same_thread`). Logger configured at module level; `KeyboardInterrupt` graceful shutdown. | `mcp_server`, `store`, `mcp` (optional) |
-
-### Language analyzers
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/analyzers.py` | `LanguageAnalyzer` protocol, `PythonAnalyzer` (AST-based with shared `_iter_ast` generator), `TypeScriptAnalyzer` / `JavaScriptAnalyzer` (regex-based, tsconfig alias + workspace packages resolution, `.mts`/`.mjs` extensions, comment stripping), `get_analyzer()` registry (15 languages). Re-exports `detect_language` from `language_detection`. ~420 LOC. | `language_detection`, `analyzer_engine`, `utils` |
-| `trammel/language_detection.py` | **New in 3.12.0.** `detect_language(project_root)` with priority order: (1) explicit `.trammel.json`, (2) unambiguous config files (`Cargo.toml`, `go.mod`, `pyproject.toml` with `[project]`, etc.), (3) source-extension counting. Extracted from `analyzers.py`. ~126 LOC. | `analyzer_engine`, `utils` |
-| `trammel/analyzer_engine.py` | `RegexAnalyzerEngine` backed by `AnalyzerSpec`. Generic `collect_symbols`, `collect_typed_symbols`, `analyze_imports`, `pick_test_cmd`, `error_patterns`, plus `_IMPORT_RESOLVERS` dispatch table. Class shims for 10 languages (`GoAnalyzer`, `RustAnalyzer`, `CppAnalyzer`, `JavaAnalyzer`, `CSharpAnalyzer`, `RubyAnalyzer`, `PhpAnalyzer`, `SwiftAnalyzer`, `DartAnalyzer`, `ZigAnalyzer`). C and Kotlin reuse the C++ and Java specs. ~195 LOC (down from 588). | `analyzer_resolvers`, `analyzer_specs`, `utils` |
-| `trammel/analyzer_resolvers.py` | **New in 3.12.0.** Per-language import-graph resolvers extracted from `analyzer_engine.py`: `_resolve_go_imports` (via `go.mod`), `_resolve_rust_imports` (workspace + crate via `Cargo.toml`), `_resolve_cpp_imports` (via include graph), `_resolve_java_imports` + `_detect_java_source_roots` (Maven/Gradle source detection), `_resolve_csharp_imports`, `_resolve_ruby_imports`, `_resolve_php_imports`, `_resolve_swift_imports` (+ `_build_swift_module_map`), `_resolve_dart_imports`, `_resolve_zig_imports`. ~448 LOC. | `analyzer_specs`, `utils` |
-| `trammel/analyzer_specs.py` | Declarative regex specs (`SPEC_REGISTRY`: 12 entries — Go, Rust, C, C++, Java, Kotlin, C#, Ruby, PHP, Swift, Dart, Zig; C shares the C++ spec and Kotlin shares the Java spec). Each spec bundles `symbol_patterns`, `typed_patterns`, `strip_comments` key, `test_cmd`, `error_patterns`, and an optional `ImportSpec` with strategy name + regex patterns. The 10 engine classes plus the TypeScript and JavaScript analyzers are the 12 regex analyzer classes; Python is AST-based. ~423 LOC. | stdlib |
-| `trammel/analyzers_ext.py` | Backward-compatibility shim — re-exports `CppAnalyzer`, `GoAnalyzer`, `JavaAnalyzer`, `RustAnalyzer` from `analyzer_engine.py`. | `analyzer_engine` |
-| `trammel/analyzers_ext2.py` | Backward-compatibility shim — re-exports `CSharpAnalyzer`, `DartAnalyzer`, `PhpAnalyzer`, `RubyAnalyzer`, `SwiftAnalyzer`, `ZigAnalyzer` from `analyzer_engine.py`. | `analyzer_engine` |
-
-### Implicit dependencies
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/implicit_deps.py` | `ImplicitDependencyGraphEngine` — hybrid explicit+implicit graphs, gap analysis, `suggest_dependencies_for_new_module()`. Re-exports `NamingConventionEngine`, `SharedStateDetector`, `PatternLearner`, `NAMING_CONVENTION_RULES` from the split modules. ~268 LOC (down from 807). | `implicit_deps_engines`, `pattern_learner` |
-| `trammel/implicit_deps_engines.py` | **New in 3.12.0.** `NamingConventionEngine` (XService→XModel etc., rules loaded from `data/patterns.json` via `pattern_config`) + `SharedStateDetector` (file read/write pattern coupling) + helpers `_extract_base_name`, `_extract_suffix`, `INFRASTRUCTURE_PATTERNS`, `DEFAULT_CONVENTION_CONFIDENCE`. ~340 LOC. | `pattern_config` |
-| `trammel/pattern_learner.py` | **New in 3.12.0.** `PatternLearner` — co-occurrence / suffix-based / infrastructure pattern accumulation from import graphs. ~191 LOC. | `implicit_deps_engines` (for `_extract_suffix`) |
-
-### Shared utilities
-
-| Path | Purpose | Main deps |
-|------|---------|-----------|
-| `trammel/utils.py` | File walking (`_walk_project_sources`, `_collect_project_files`), comment stripping (`_strip_c_comments`, `_strip_hash_comments`, `_strip_php_comments`), symbol collection (`_collect_symbols_regex`, `_collect_typed_symbols_regex`), workspace package resolution (`_read_workspace_packages`, `_resolve_workspace_import`), namespace-import resolution (`_walk_and_map_namespaces`, `_resolve_namespace_import`), JSON/hashing (`dumps_json`, `sha256_json`), DB (`db_connect`, `transaction`, `DEFAULT_DB_PATH`), `topological_sort`, `analyze_failure`. Re-exports text-similarity and scaffold-validation APIs. **3.12.1** set `db_connect(isolation_level=None)` to defeat Python 3.14's implicit-transaction-before-DML behavior, and made `transaction()` defensive with SAVEPOINT for nested cases plus explicit COMMIT/ROLLBACK. ~458 LOC. | `text_similarity`, `scaffold_validation` |
-| `trammel/text_similarity.py` | **New in 3.12.0.** Trigram similarity (`_trigram_list`, `trigram_signature`, `unique_trigrams`, `trigram_bag_cosine`, `_cosine`) and goal-text similarity (`_VERB_SYNONYMS`, `_ABBREVIATIONS`, `_TECH_SYNONYMS`, `expand_goal_terms`, `normalize_goal`, `word_jaccard`, `word_substring_score`, `goal_similarity`). ~156 LOC. | stdlib |
-| `trammel/pattern_config.py` | **New in 3.12.0.** `load_pattern_config()` + `get_config()` loader for `data/patterns.json`. Validates schema, parses JSON pairs into typed tuples, caches at first access. | stdlib |
-| `trammel/data/patterns.json` | **New in 3.12.0.** Externalized `naming_convention_rules`, `infrastructure_patterns`, `file_role_patterns`, `goal_role_patterns`. Editable without code changes. | — |
-
-## Tests
+## Files
 
 | Path | Purpose |
 |------|---------|
-| `tests/test_trammel.py` | Core: trigrams, toposort, import analysis, store (incl. trigram index), harness, plan_and_execute, explore |
-| `tests/test_trammel_extra.py` | Edges: failure analysis, step updates, constraint filtering/propagation, transactions, context manager, incremental harness, MCP dispatch, CLI |
-| `tests/test_strategies.py` | Strategy registry, strategy learning, strategy stats, beam strategies incl. critical_path/cohesion/minimal_change (TestBeamStrategies moved from test_trammel_extra.py) |
-| `tests/test_analyzers.py` | Language analyzers: PythonAnalyzer, TypeScriptAnalyzer (symbols, imports, tsconfig, graceful fallbacks, comment stripping), GoAnalyzer, RustAnalyzer, CppAnalyzer, JavaAnalyzer, CSharpAnalyzer, RubyAnalyzer, PhpAnalyzer, SwiftAnalyzer, DartAnalyzer, ZigAnalyzer, detect_language |
-| `tests/test_findings_checklist.py` | RecipeLab validation matrix in CI: `estimate` / `list_recipes` baselines, greenfield chain scaffold, all-existing skip JSON, refactor + `suppress_creation_hints`, chain `critical_path_length` vs `compute_scaffold_dag_metrics` (stdlib-only; no RecipeLab HTTP). **Adversarial scaffold tests** (9): circular dependency, missing deps, empty scaffold, over-constrained, self-referential, diamond, deep nesting, duplicates, update action. |
-| `tests/test_implicit_deps.py` | Implicit dependency inference: `NamingConventionEngine` (suffix rules, infrastructure patterns), `SharedStateDetector` (file access coupling), `PatternLearner` (co-occurrence, suffix-pattern, infrastructure learning), `ImplicitDependencyGraphEngine` (hybrid graph, gap analysis, new module suggestions). 23 tests. |
-| `tests/test_mcp_dispatch.py` | **New in 3.12.0.** Contract + coverage tests for the MCP dispatch layer: schema↔dispatch parity, category-registry sync, unknown-tool error shape, previously-uncovered handlers (`record_steps`, `claim/release/available_steps`, `merge_plans`, `usage_stats`, `list_strategies`, `resolve_failure`), and schema-driven int coercion. 11 tests. |
-| `tests/test_analyzer_regression.py` | Canonical snippet regression suite for all 15 language analyzers. Asserts expected symbols/imports per language and that `collect_symbols` is a superset of `collect_typed_symbols` (regex-parity check). |
-| `tests/test_analyzer_specs.py` | Spec-driven validation: every regex compiles, comment strippers are registered, error patterns are well-formed, extensions are non-empty and dotted, typed patterns overlap with symbol patterns. |
-| `tests/test_recipe_index_audit.py` | Verifies each recipe index (term, trigram, MinHash, arch-MinHash) returns candidates and that unified retrieval aggregates them correctly. |
-| `tests/test_archetypes.py` | Runs decomposition against 12 real sample projects under `tests/archetypes/` (Django, Bun, etc.) — catches regressions that toy snippets miss. |
+| `.gitattributes` | LF for source text |
+| `.github/workflows/release.yml` | Six release binaries, GitHub Release, npm publish |
+| `.github/workflows/rust.yml` | cargo test, zero deps, no markers, syntax core, bench rule |
+| `.gitignore` | Build output, store, local databases, editor files |
+| `AGENTS.md` | Module map, commands, release rules for agents |
+| `CHANGELOG.md` | 4.0.0 note plus the Python 3.15.3 notes |
+| `CLAUDE.md` | Source-tree guide for coding agents |
+| `Cargo.lock` | Locks the crate to itself. No other packages. |
+| `Cargo.toml` | Crate metadata, version 4.0.0, empty dependencies |
+| `GROK_CONNECTORS.md` | How a Grok client starts trammel mcp |
+| `LICENSE` | MIT licence |
+| `LLM_Development.md` | Chronological log, Python history included |
+| `README.md` | Install, benchmarks, and the Python release notes |
+| `SYSTEM_PROMPT.md` | MCP and CLI tool loop for LLM clients |
+| `bench/python_baseline.json` | Recorded Python medians used as CI floors |
+| `bench/rust_measured.json` | Last Rust medians written by bench_gate.py |
+| `bench/same_runner.json` | Same-machine Python 3.15.3 vs Rust medians |
+| `data/patterns.json` | Implicit-edge rules embedded by src/implicit.rs |
+| `docs/LLM_CONTRACT.md` | JSON contract 4.0.0 |
+| `docs/demo-plan-explore.png` | README screenshot |
+| `findings/kimi_review_1/trammel.md_closed` | Historical review note |
+| `findings/tmm_kimi_review_3/trammel_closed.md` | Historical review note |
+| `install.ps1` | Download a published release on Windows |
+| `install.sh` | Download a published release into ~/.local/bin |
+| `llms.txt` | Short command card |
+| `npm/trammel-darwin-arm64/package.json` | Platform package manifest. The release job copies the binary in. |
+| `npm/trammel-darwin-x64/package.json` | Platform package manifest. The release job copies the binary in. |
+| `npm/trammel-linux-arm64/package.json` | Platform package manifest. The release job copies the binary in. |
+| `npm/trammel-linux-x64/package.json` | Platform package manifest. The release job copies the binary in. |
+| `npm/trammel-windows-arm64/package.json` | Platform package manifest. The release job copies the binary in. |
+| `npm/trammel-windows-x64/package.json` | Platform package manifest. The release job copies the binary in. |
+| `npm/trammel/bin/trammel-mcp.js` | Spawn the platform trammel-mcp binary |
+| `npm/trammel/bin/trammel.js` | Spawn the platform trammel binary |
+| `npm/trammel/package.json` | Wrapper @iron_adamant/trammel |
+| `parity/fixtures/c/broken.c` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.c` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.cc` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.cpp` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.cxx` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.h` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.hpp` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/c/util.hxx` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/broken.json` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/config.cfg` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/config.ini` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/config.json` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/config.toml` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/config.yaml` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/config.yml` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/data/query.sql` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/go/broken.go` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/go/main.go` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/broken.js` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/component.tsx` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/legacy.cjs` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/mod.mjs` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/sample.js` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/types.ts` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/javascript/view.jsx` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/jvm/App.cs` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/jvm/App.java` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/jvm/App.kt` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/jvm/App.scala` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/jvm/broken.java` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/jvm/build.kts` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/php/app.php` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/php/broken.php` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/python/broken.py` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/python/ext.pyx` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/python/sample.py` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/python/script.pyw` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/python/unicode.py` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/ruby/app.rb` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/ruby/broken.rb` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/rust/broken.rs` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/rust/lib.rs` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/shell/broken.sh` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/shell/run.bash` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/shell/run.sh` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/shell/run.zsh` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/swift/App.swift` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/swift/broken.swift` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/notes.adoc` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/notes.markdown` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/notes.rst` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/notes.txt` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/rows.csv` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/rows.tsv` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/run.log` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/text/tiebreak.txt` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/web/broken.html` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/web/page.htm` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/web/site.css` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/web/site.less` | Small sample parsed by the Rust language tests |
+| `parity/fixtures/web/site.scss` | Small sample parsed by the Rust language tests |
+| `parity/goldens/corpora.json` | Historical parser corpus summary |
+| `parity/goldens/extensions.json` | Historical extension summary |
+| `parity/goldens/fixtures.json` | Parser fixture golden used by Rust tests |
+| `rust-toolchain.toml` | Pins rustc 1.99.1 |
+| `schemas/add_constraint.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/available_steps.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/claim_step.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/complete_plan.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/deactivate_constraint.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/decompose.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/envelope.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/estimate.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/explore.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/export_plan.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/failure_history.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/get_constraints.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/get_plan.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/get_recipe.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/history.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/list_plans.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/list_recipes.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/list_strategies.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/merge_plans.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/prune_plans.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/prune_recipes.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/record_steps.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/release_step.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/resolve_failure.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/resume.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/save_recipe.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/start_plan.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/status.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/update_plan_status.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/usage_stats.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/validate_recipes.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/verify_plan.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `schemas/verify_step.schema.json` | JSON schema for one MCP tool or the shared envelope |
+| `scripts/bench_gate.py` | Time the Rust binary against recorded Python floors |
+| `scripts/check_no_todos.py` | Fail on TODO or FIXME in src |
+| `scripts/check_syntax_core.py` | Check parser files against the manifest |
+| `scripts/check_zero_deps.py` | Fail if Cargo.lock names anything but trammel |
+| `scripts/release.sh` | Print the tag command after checking Cargo.toml. Does not publish. |
+| `scripts/syntax_core_manifest.txt` | SHA-256 of the vendored parser files |
+| `server.json` | MCP registry id for the npm package |
+| `src/benchstat.rs` | Median-interval regression rule |
+| `src/bin/trammel_mcp.rs` | trammel-mcp binary |
+| `src/canon.rs` | Stable JSON helpers |
+| `src/cli.rs` | Argv parser shared by both binaries |
+| `src/config.rs` | .trammel.json and [tool.trammel] in a project pyproject.toml |
+| `src/contract.rs` | Success and failure envelope |
+| `src/doctor.rs` | Local health report, no network |
+| `src/export.rs` | trammel.plan JSON |
+| `src/goal.rs` | Goal text fingerprints and hints |
+| `src/harness.rs` | Isolated verify: copy, preflight, test command |
+| `src/hash.rs` | SHA-256 |
+| `src/implicit.rs` | Naming, shared-state, and co-occurrence edges |
+| `src/json.rs` | Std-only JSON parser |
+| `src/lang/analyze.rs` | Language detection and project analysis |
+| `src/lang/blank.rs` | Blank and comment spans |
+| `src/lang/code.rs` | Lossless lexer for non-Python languages |
+| `src/lang/imports.rs` | Hand-written import resolvers |
+| `src/lang/json.rs` | JSON language helpers |
+| `src/lang/kind.rs` | Token kinds |
+| `src/lang/mod.rs` | Language module and extension map |
+| `src/lang/python/lex.rs` | Python lexer |
+| `src/lang/python/mod.rs` | Python parser facade |
+| `src/lang/python_symbols/expr.rs` | Python expression walk |
+| `src/lang/python_symbols/mod.rs` | Python symbol extraction |
+| `src/lang/symbols.rs` | Hand-written symbol scanners |
+| `src/lib.rs` | Crate root and version constants |
+| `src/main.rs` | trammel binary |
+| `src/mcp.rs` | Stdio MCP server |
+| `src/migrate.rs` | Read-only import of trammel.db |
+| `src/planner.rs` | Decompose, explore, plan_and_execute |
+| `src/root.rs` | Project root and store path |
+| `src/score.rs` | Step relevance |
+| `src/similarity.rs` | Recipe text similarity |
+| `src/store.rs` | .trammel snapshot, journal, and lock |
+| `src/strategies.rs` | Nine beam orderings |
+| `src/syntax/STELE_REV` | See the neighbouring files |
+| `src/syntax/cst.rs` | Concrete syntax tree |
+| `src/syntax/edit.rs` | Syntax edits |
+| `src/syntax/incremental.rs` | Incremental reparse |
+| `src/syntax/mod.rs` | Syntax core facade |
+| `src/syntax/query.rs` | Syntax queries |
+| `src/tools.rs` | One dispatch for CLI tools and MCP tools |
+| `src/topo.rs` | Topological sort |
+| `src/walk.rs` | File walk and ignore rules |
+| `tests/archetypes/facade_service/pyproject.toml` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/coordinator.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_1.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_10.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_11.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_12.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_2.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_3.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_4.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_5.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_6.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_7.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_8.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/facade_service/src/workers/worker_9.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/pyproject.toml` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/generated/generated_1.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/generated/generated_2.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/generated/generated_3.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/generated/generated_4.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/generated/generated_5.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/handmade/cli.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/generated_code/src/handmade/core.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/pyproject.toml` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/a.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/b.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/c.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/deep/__init__.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/deep/nested/__init__.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/deep/nested/module/__init__.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/deep/nested/module/thing.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/hub.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m1.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m2.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m3.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m4.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m5.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m6.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m7.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/m8.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/legacy_ball_of_mud/src/shallow.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/packages/api/src/api/__init__.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/packages/auth/src/auth/__init__.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/packages/shared_utils/src/shared_utils/__init__.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/packages/shared_utils/src/shared_utils/hashing.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/packages/shared_utils/src/shared_utils/tokens.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/packages/shared_utils/src/shared_utils/validation.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/monorepo/pyproject.toml` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/pyproject.toml` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_1.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_2.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_3.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_4.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_5.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_6.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_7.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/src/module_8.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/tests/test_file_1.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/tests/test_file_2.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/tests/test_file_3.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/tests/test_file_4.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/tests/test_file_5.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/archetypes/test_farm/tests/test_file_6.py` | Sample project used by the Rust decompose golden. Not the product. |
+| `tests/determinism.rs` | test_farm decompose matches the golden on every OS |
+| `tests/four_claims.rs` | Four processes claim one store |
+| `tests/goldens/test_farm_decompose.json` | Frozen decompose output, timings removed |
+| `tests/npm_packages.rs` | npm names, bins, and release.yml publish order |
+| `wiki-local/glossary.md` | Current terms |
+| `wiki-local/index.md` | Local wiki hub |
+| `wiki-local/spec-project.md` | Short Rust product spec |
 
 ## Data flow
 
-1. `plan_and_execute` → `RecipeStore.retrieve_best_recipe` with optional `context_files` (two-phase: text-only fast path, then composite scoring with file overlap). Scoring uses `goal_similarity` (0.3 trigram cosine + 0.4 word Jaccard + 0.3 substring on normalized text). Composite weights: text 0.4, file overlap (Jaccard) 0.25, success ratio 0.15, recency 0.2 (30-day half-life). Min threshold 0.3 → optional cached strategy.
-2. Else `Planner.decompose` detects language (or uses provided `analyzer`), scans symbols via `LanguageAnalyzer` (Python AST; TypeScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig regex), builds dependency graph, `topological_sort` orders files → steps with rationale + depends_on. Returns `analysis_meta` with `language`, `scope`, `files_analyzed`, `dep_files`, `dep_edges`, `timing_s` (symbols, imports, total), and optional `warning` for unsupported languages. Active constraints enforced via `_parse_constraints` → `_mark_avoided` → `_inject_orderings` → `_mark_incompatible` → `_add_prerequisites`. Passes project file context to recipe retrieval for structural matching.
-3. `explore_trajectories` emits beams from the strategy registry (pluggable via `register_strategy`). When `store` provided, strategies sorted by historical success rate via `get_strategy_stats()`. Constraint-aware strategies: `bottom_up` (dependencies first, skipped at end), `top_down` (API first, skipped at end), `risk_first` (highest coupling first, incompatible isolated, package batching), `critical_path` (longest dependency chain first), `cohesion` (flood-fill connected components, largest first, toposort within), `minimal_change` (fewest symbols first). Skipped steps excluded from beam edits.
-4. `ExecutionHarness.run` copies tree, applies content edits, runs language-appropriate test command. `prepare_base(project_root)` creates one filtered base copy; `run_from_base(edits, base_dir)` copies from it (avoids re-filtering per beam). Beams execute in parallel via `ProcessPoolExecutor` (falls back to sequential). `verify_step` does single-step verification. `run_incremental` verifies step-by-step, aborting on first failure with structured `failure_analysis` (accepts language-specific `error_patterns`).
-5. Success → `save_recipe` (strategy + constraints + normalized trigram index + file paths in `recipe_files`); failure → `add_constraint` (type, description, context). `prune_recipes` removes stale low-quality recipes (cascade deletes). All mutations wrapped in `BEGIN IMMEDIATE` transactions with BUSY retry. Plans/steps/trajectories logged in SQLite.
-
-## Schema (`trammel.db`, 15 tables)
-
-| Table | Key columns |
-|-------|-------------|
-| `recipes` | sig (PK), pattern, strategy, constraints, successes, failures, created, updated |
-| `recipe_trigrams` | trigram, recipe_sig (FK) — indexed on trigram for fast candidate lookup (legacy; retained for transition) |
-| `recipe_terms` | term, recipe_sig, count — inverted word index for TF-IDF recipe lookup |
-| `recipe_signatures` | recipe_sig (PK), signature — MinHash LSH signature for deduplication / ANN |
-| `recipe_arch_signatures` | recipe_sig (PK), signature — MinHash of architecture shape |
-| `recipe_index_meta` | key (PK), value — recipe-index bookkeeping |
-| `recipe_files` | file_path, recipe_sig (FK) — indexed on both columns for structural matching (Jaccard overlap) |
-| `scaffold_recipes` | sig (PK), pattern, scaffold, domain keywords, role counts, successes, failures |
-| `scaffold_trigrams` | trigram, scaffold_sig (FK) — scaffold-recipe retrieval |
-| `plans` | id (PK), goal, strategy, status, current_step, total_steps, created, updated |
-| `steps` | id (PK), plan_id (FK), step_index, description, rationale, depends_on, status, edits_json, verification, constraints_found, claimed_by, claimed_at, created |
-| `constraints` | id (PK), plan_id (FK), step_id (FK), constraint_type, description, context, active |
-| `trajectories` | id (PK), plan_id (FK), beam_id, strategy_variant, steps_completed, outcome, failure_reason |
-| `failure_patterns` | file_path, error_type, error_message, occurrences, resolution, first/last seen |
-| `usage_events` | event_type, detail, value, created — tool calls, recipe hits, strategy outcomes |
-
-## Changelog (high level)
-
-- **3.15.3:** MCP Python SDK 2.x startup fix (`on_list_tools` / `on_call_tool`, dependency `mcp>=1.0.0,<3`), tool results use `isError: true` on failure, `serverInfo.version` is Trammel's version, and current docs match the code (33 tools, 15 tables, 12 `SPEC_REGISTRY` entries). CI runs on Ubuntu and macOS. See `CHANGELOG.md`.
-- **3.12.0:** Module-scale refactor to hold the 500-LOC-per-file discipline. Every module now under 500 LOC (was 9 files over, worst at 1223). Splits: `store_recipes.py` (1223 → 373) into `store_recipes` + `recipe_fingerprints` + `store_retrieval` + `store_scaffolds`; `store.py` into itself + `store_plans` + `store_telemetry`; `mcp_server.py` into itself + `tool_schemas`; `implicit_deps.py` into itself + `implicit_deps_engines` + `pattern_learner`; `analyzer_engine.py` into itself + `analyzer_resolvers`; `utils.py` into itself + `text_similarity` + `scaffold_validation`; `analyzers.py` into itself + `language_detection`; `scaffold_logic.py` into itself + `scaffold_creation`; `core.py` into itself + `planner_helpers`. All public APIs unchanged via re-exports. Naming-convention rules and file/goal role regex tables externalized to `trammel/data/patterns.json` (loaded via `pattern_config.py`). `pyproject.toml` version bumped to 3.12.0 (3.11.3 was drift — README already documented features shipped at that number); package data now ships `data/*.json`. Docstrings added to Planner/ExecutionHarness/RecipeStore public APIs and every MCP `_handle_*`. New `tests/test_mcp_dispatch.py` (11 tests) covering schema↔dispatch parity, int coercion, and previously-uncovered handlers. README "Verifies as it goes" clarified (harness runs tests; MCP `verify_step` is static/heuristic). `SYSTEM_PROMPT.md` gains explicit `decompose` vs `explore` vs `create_plan` decision block. 406 tests passing.
-- **3.11.3:** Robustness for test-heavy projects, `explore` fallback, and strategy trajectory data (see README for details). Shipped in the repo without a version bump; the 3.12.0 refactor closed the drift.
-- **3.11.0:** Core modularization + recipe word index + analyzer farm collapse. Extracted `core.py` monolith into `scoring.py`, `scaffold_logic.py`, `goal_nlp.py`, `constraints.py`, `scaffold_templates.py` (orchestrator now ~570 LOC). Added `recipe_index.py` with zero-dep inverted word index (TF-IDF) and MinHash LSH for deduplication / approximate nearest neighbors; schema expanded with `recipe_terms` and `recipe_signatures` tables; integrated into `store_recipes.py` while keeping legacy trigram tables for transition safety. Collapsed 15 regex analyzers into declarative `analyzer_specs.py` + single `RegexAnalyzerEngine` in `analyzer_engine.py`; `analyzers_ext.py` and `analyzers_ext2.py` are now backward-compat shims. 358 tests passing.
-- **3.10.4:** Adversarial scaffold hardening + structural recipe matching fix. Added `validate_scaffold()` in `utils.py` with pre-flight detection for circular dependencies, duplicate files, self-referential entries, over-constrained nodes (>4 deps), and missing dependencies. `decompose()` returns clean `{"error": "...", "analysis_meta": {"scaffold_validation": ...}}` instead of crashing. Empty scaffold with creation intent now returns `{"error": "empty_scaffold", "warning": ...}` instead of falling back to full-repo refactor. Scaffold entries support `action: "update"` to plan updates for existing files. `compute_scaffold_dag_metrics` hardened against cycles (uses `.get(d, 0)` instead of `KeyError`). Fixed `_goal_fingerprint_from_text` in `store_recipes.py` to use word-based role patterns (`_GOAL_ROLE_RE`) instead of path patterns, fixing `structural_similarity: 0.0` in recipe matching. Added `_scaffold_fingerprint` and `_scaffold_structural_similarity` (role vectors + DAG metrics) for scaffold recipe retrieval. 337 tests (9 new adversarial scaffold tests in `test_findings_checklist.py`).
-- **3.10.3:** Documentation: scaffold DAG metrics for multi-agent dispatch. README gains "Scaffold DAG Metrics for Multi-Agent Dispatch" section documenting `max_parallelism`, `layer_widths`, `critical_path_length`, `max_dependency_depth` with usage guidance for parallel agent workflows. Spec §5 updated. RecipeLab Review Ten closure — zero bugs, validated 40-step/59-edge scaffold decomposition across 6 feature trees. No code changes.
-- **3.10.0:** Phase 10 implicit dependency inference: **`ImplicitDependencyGraphEngine`** addresses Trammel's blindness to ~50% of actual dependencies (naming conventions, shared state coupling, pattern-based inference). `NamingConventionEngine` with suffix rules (Service→Model, Route→Service, Controller→Service/Model, etc.). `SharedStateDetector` tracks file read/write patterns to infer coupling. `PatternLearner` learns co-occurrence and suffix-based patterns from import graphs. Hybrid graphs merge explicit + implicit deps. Gap analysis reports `trammel_blind_spots`. Integrated into `Planner.decompose()` with `analysis_meta.implicit_dependency_analysis`. Exports: `ImplicitDependencyGraphEngine`, `NamingConventionEngine`, `SharedStateDetector`, `PatternLearner`. 328 tests (23 new + 305 existing).
-- **3.9.4:** RecipeLab findings closure: `compute_scaffold_dag_metrics`, `skipped_existing_scaffold`, refactor-verb creation guard, `suppress_creation_hints`, `scaffold_dag_metrics` on expand_repo scaffolds, MCP `summary_only` top-level DAG/skip fields; `tests/test_findings_checklist.py` (305 tests). Stdlib-only core unchanged.
-- **3.8.0:** Scaffold-only default when `scaffold` is non-empty (`expand_repo` opt-in for full-repo decomposition); `_decompose_scaffold_only`; batch min–max relevance normalization in `_generate_steps`; MCP `decompose.expand_repo`. 287 tests.
-- **3.7.13:** Phase 6–aligned improvements: composite-ranked `near_match_recipes` (optional `context_files` in store API; planner passes project files); relevance blends keywords with import in-degree; goal text can infer scaffold paths (`_extract_paths_from_goal`); role-based directory hints for creation steps; `get_recipe(include_scaffold=true)` + `strategy_to_scaffold()`. 285 tests.
-- **3.7.10:** Fix cross-thread SQLite crash in MCP stdio server. `_configure_server` now takes `db_path` instead of a shared `RecipeStore`; each `call_tool` invocation creates its own `RecipeStore` inside the `asyncio.to_thread` worker, ensuring the `sqlite3.Connection` is created and used on the same thread. Fixes Python 3.14's stricter `check_same_thread` enforcement. 248 tests (all passing).
-- **3.7.9:** Comprehensive cleanup — fixed CLI goal validation bug, missing `created` column in step queries, mixin stubs raise `NotImplementedError`, `_sql_in` empty-input guard, removed dead `_is_ignored_dir` import, replaced all positional `sqlite3.Row` unpacking with named access (8 sites), pre-compiled Rust/Cargo/Maven regex patterns, simplified beam capping and step descriptions, walrus `_extract_step_files`, `TYPE_CHECKING` imports, private `_cosine`, `KeyboardInterrupt` handling in MCP stdio, `py.typed` in package-data, fixed Zig comment, documented Laplace smoothing. 248 tests (all passing).
-- **3.7.8:** Code quality — DRY step dicts (`_STEP_COLUMNS` + `_step_to_dict()` in store.py), simplified helpers (`word_jaccard`, `cosine`, `_strip_php_comments` in utils.py), consistent `isinstance()` in `PythonAnalyzer.collect_typed_symbols`. 248 tests (all passing).
-- **3.7.7:** Structural deduplication — sqlite3.Row named columns, shared step-file accessor, shared namespace resolver. Replaced all fragile positional tuple indexing (`row[0]`, `row[1]`, ...) across store.py, store_recipes.py, and store_agents.py with `sqlite3.Row` named column access (`row["id"]`, `row["goal"]`, ...) via `conn.row_factory = sqlite3.Row`. Extracted `_step_file()` helper in strategies.py (replaces 17 repeated `s.get("file", "")` calls). Extracted `_resolve_namespace_import()` into utils.py (shared prefix-matching loop used by Java, C#, and PHP analyzers). Simplified PHP analyzer by normalizing namespace keys to dots upfront. 248 tests (all passing).
-- **3.7.6:** Code quality audit — bug fixes, robustness, modernization, test consistency. Fixed unsafe JSON payload parsing in CLI (crashes on non-dict input). Fixed fragile `failure_analysis` access in `run_incremental` (crashes if value is `None` instead of missing). Added truncation indicator (`+N more`) to dependency list in step rationale (consistency with symbol list). Simplified beam-count capping expression in `explore_trajectories`. Modernized JS extension stripping with `removesuffix()` in TypeScriptAnalyzer. Applied walrus operator in MCP `get_recipe` handler. Eliminated double dict lookup in `_handle_list_strategies`. Added missing `-> None` return type hints to 24 test methods across `test_strategies.py` and `test_analyzers.py`. 248 tests (all passing).
-- **3.7.5:** Code quality audit — analyzer deduplication. Extracted `_walk_and_map_namespaces()` into `utils.py` (shared namespace/package-to-files walk pattern). Refactored `CSharpAnalyzer.analyze_imports`, `PhpAnalyzer.analyze_imports`, and `JavaAnalyzer.analyze_imports` to use it (eliminates ~45 lines of near-identical code across 3 files). Full multi-agent audit confirmed no dead code, TODOs, truncated code, or broken imports. 248 tests (all passing).
-- **3.7.4:** Code quality audit — dead code removal, simplification, modernization, bug hardening. Fixed potential `ZeroDivisionError` in `explore_trajectories` when strategy registry is empty (core.py). Fixed potential `ValueError` in `_run_beams_parallel` with 0 beams by clamping workers to `max(1, ...)` (__init__.py). Removed dead `_default_beam_count` from strategies.py (logic inlined into core.py). Replaced fragile `assert` statements with `RuntimeError` in mcp_server.py (survives `-O` flag). Moved `logging.basicConfig` to module level in mcp_stdio.py (fixes lost early errors). Modernized `loop.run_in_executor` to `asyncio.to_thread` in mcp_stdio.py. Consolidated 4 separate `SELECT COUNT(*)` queries into single scalar-subquery SQL in `get_status_summary` (store.py). Extracted `_sql_in()` helper in store_recipes.py (deduplicates 8 repeated IN-clause patterns). Added `_MAX_LOG_GOAL_LENGTH` constant replacing magic `100` in recipe log events. Replaced dead `TYPE_CHECKING: pass` block with documented `RecipeStore` import in store_recipes.py. Eliminated redundant dict-spread copies in `decompose()` recipe paths (uses `setdefault` instead). Added lazy `_get_analyzer_registry()` helper to avoid late inline imports in core.py. Simplified `_handle_list_strategies` comprehension in mcp_server.py (removed confusing single-element list unpacking). Updated test to remove dependency on deleted `_default_beam_count`. 248 tests (all passing).
-- **3.7.2:** Codebase audit and cleanup. Fixed `_inject_orderings` dict comprehension that could produce `None` keys when steps lack a `file` field (core.py). Fixed recipe mutation bug where `decompose()` mutated dicts returned by `retrieve_best_recipe()` — now returns shallow copies (core.py). Used `DEFAULT_DB_PATH` constant in `synthesize()` instead of hardcoded string (__init__.py). Added missing `claimed_by`/`claimed_at` fields to `get_step()` for API consistency with `get_plan()` (store.py). Normalized path separator handling in `SwiftAnalyzer._build_module_map()` for cross-platform correctness (analyzers_ext2.py). Minor: `dict(step)` → `step.copy()`, removed stray blank line in analyzers.py. 248 tests (all passing).
-- **3.7.1:** Mixin type safety, robustness, performance, and test coverage. Added typed attribute stubs (`conn`, `log_event`, `get_plan`) to `RecipeStoreMixin` and `AgentStoreMixin` for type-checker compatibility. Added status guard in `claim_step` (rejects non-pending steps). Narrowed `_run_beams_parallel` exception catch from `(OSError, RuntimeError)` to `OSError` only, added debug logging for fallback. Optimized `run_incremental` from O(K^2) to O(K) using persistent base copy with accumulated edits. Added 9 new `collect_typed_symbols` tests (Rust, C++, Java, C#, Ruby, PHP, Swift, Dart, Zig). 248 tests (all passing).
-- **3.7.0:** Comprehensive codebase audit, bug fixes, and modernization. Fixed `_order_critical_path` cycle-handling bug in `strategies.py` (leaked `in_stack` entries caused false cycle detection). Fixed `log_event` in `store.py` using bare `conn.commit()` without transaction retry (now wrapped in `transaction()`). Fixed schema migration `OperationalError` catch to only suppress "duplicate column" errors. Unified inconsistent win-rate formulas between `store.py` and `core.py` (both now use Laplace smoothing). Fixed `trigram_signature()[:8]` producing `list[float]` fingerprint in `core.py` (replaced with `sha256_json()[:16]` string hash). Fixed Rust `_read_cargo_crates` relpath bug (was relative to CWD, now relative to project root). Fixed Java `analyze_imports` not stripping comments (import statements inside comments were falsely detected). Fixed PHP grouped-use statement parsing not stripping `as` aliases. Removed dead `run()` alias in `harness.py` (trivial wrapper for `verify_step()`). Eliminated N+1 query in `retrieve_best_recipe` (batch-fetches recipe files). Simplified `prune_recipes` to use SQL-side filtering instead of Python loop. Consolidated `_collect_symbols_regex` and `_collect_typed_symbols_regex` to share `_walk_project_sources` generator (eliminated ~30 lines of duplication). Consolidated hardcoded `"trammel.db"` default across 6 locations into single `DEFAULT_DB_PATH` constant. Derived `_SUPPORTED_LANGUAGES` from `_ANALYZER_REGISTRY` instead of hardcoded frozenset. Added language/analyzer registry sync assertion in `mcp_server.py`. Removed redundant `has()` calls in C# config detection. Fixed redundant C# detection `has(f)` inside `any()` on `os.listdir` results. Moved mid-file imports to top in `analyzers.py` and `test_analyzers.py`. Removed premature Python 3.14 classifier from `pyproject.toml`. Fixed inconsistent `unittest.mock` import style in `test_strategies.py`. Updated test calls from removed `h.run()` to `h.verify_step()`. 239 tests (all passing).
-- **3.6.0:** Codebase cleanup, bug fixes, and modernization. Fixed TOCTOU race in `record_failure_pattern` and `resolve_failure_pattern` (wrapped in transactions). Removed dead code: redundant `run()` body (now delegates to `verify_step()`), dead `self.store is not None` guard in `core.py`, unnecessary `or ""` in `harness.py`, redundant `success = False` in `store.py`. Eliminated duplicated logic: extracted `_count_importers()` in `strategies.py` (replaced 3x copy-pasted importer-counting), `_is_claimed_by_other()` in `store_agents.py`, `_try_resolve()` in `analyzers.py` (deduplicated TS path resolution), removed redundant `_collect_files` wrappers in `TypeScriptAnalyzer` and `CppAnalyzer`. Made `_split_active_skipped` single-pass. Merged two transactions into one in `validate_recipes`. Simplified `_handle_list_strategies` redundant `stats.get`. Fixed `JavaAnalyzer.pick_test_cmd` fallback from `./gradlew` to `gradle` (system binary). Added `get_analyzer` to `__init__.py` `__all__`. Modernized `Callable`/`Generator` imports to `collections.abc` (utils, strategies, mcp_server). Added `.mypy_cache/` and `.ruff_cache/` to `.gitignore`. Created PEP 561 `py.typed` marker file. Fixed fragile `c["description"]` in `core.py` (now uses `.get()`). Simplified test assertions: `set(entries)` over explicit comprehension, removed hardcoded tool count, removed stale migration comment. Made `cli.py` import of `explore` eager (was ineffective deferred import). 239 tests (all passing).
-- **3.4.1:** Analyzer gap fixes. C++ nested template parsing (2-level `<>` nesting in template/impl/fun patterns). Rust `use super::`/`use self::` and workspace crate import resolution (reads `Cargo.toml` members). PHP grouped `use Foo\{Bar, Baz}` support. Swift SPM-aware module mapping (`Sources/<Module>/` detection). TypeScript monorepo workspace support (reads `package.json` workspaces, resolves bare imports to workspace packages). Workspace helpers (`_read_workspace_packages`, `_resolve_workspace_import`) in `utils.py`. 242 tests (unchanged, all passing).
-- **3.4.0:** Usage telemetry, dispatch refactor, analyzer improvements. New `usage_events` table (8 tables total) with `log_event()` and `get_usage_stats()` on `RecipeStore`. Tool calls, recipe hit/miss rates, and strategy win rates tracked automatically. New `usage_stats` MCP tool (22 tools total). Dispatch refactored from 153-line match/case to dispatch-dict pattern with dedicated handler functions. PHP class method detection added. Java 16+ `record` keyword supported. Dart factory/named constructor detection added. Comment stripping added for 7 languages: Go, Rust, Java, C#, Ruby, PHP, Swift, Dart, Zig (shared `_strip_c_comments`, `_strip_hash_comments`, `_strip_php_comments` in `utils.py`). 5 new sample repos (Jekyll, Flame, ZLS, Laravel, Ktor). 242 tests (unchanged, all passing).
-- **3.3.1:** Codebase cleanup and module extraction. Extracted beam strategies from `core.py` into new `strategies.py` (~280 LOC), reducing `core.py` from 595 to 324 LOC. Moved shared `_collect_symbols_regex` and `_collect_typed_symbols_regex` from `analyzers.py` to `utils.py`, eliminating circular dependency workarounds (`functools.cache` lazy imports) in `analyzers_ext.py` and `analyzers_ext2.py`. DRY-ed regex pattern duplications: derived `_*_SYMBOL_PATTERNS` from `_*_TYPED_PATTERNS` for 8 languages (TS, Rust, Java, C#, Ruby, PHP, Swift, Dart). Extracted `PythonAnalyzer._iter_ast()` generator to share AST walking between `collect_symbols` and `collect_typed_symbols`. Fixed stdlib import ordering in `store_recipes.py`. All files now under 500 LOC. Total source reduced from 3,876 to 3,771 LOC (105 lines net). 242 tests (unchanged, all passing).
-- **3.3.0:** Typed symbol analysis, 3 new beam strategies, analyzer bug fixes, store refactor. New `collect_typed_symbols()` method on all 15 analyzers returns `dict[str, list[tuple[str, str]]]` (file → [(name, type_label)]) with type classification (function, class, interface, enum, struct, trait, etc.). New shared `_collect_typed_symbols_regex()` helper in `analyzers.py`. 3 new beam strategies (9 total): `leaf_first` (zero-importer files first), `hub_first` (network hub files first by in*out degree product), `test_adjacent` (files with matching test files first). Fixed Ruby analyzer basename overwriting (separate full-path and basename lookup maps). Fixed Swift analyzer overly broad directory mapping (immediate parent only). Fixed Java analyzer packageless file gap (directory-based fallback). Refactored `_init_schema()` in `store.py` into `_SCHEMA_RECIPE_TABLES` and `_SCHEMA_PLAN_TABLES` class-level SQL constants. Java `analyze_imports` eliminates double file read via `file_sources` cache. 242 tests (12 new: 3 typed symbols, 6 new strategies, 1 Ruby basename, 1 Swift parent, 1 Java packageless).
-- **3.2.1:** Codebase cleanup and bug fixes. Fixed recipe scoring bug in `store_recipes.py` where `best_score` was updated before JSON validation succeeded (corrupted entries could shadow valid recipes). Removed dead code: unused `total_files` variable in `mcp_server.py` `estimate` tool, redundant `get_analyzer` re-import. Simplified `detect_language` in `analyzers.py`: replaced 8 extension alias constants and 12-branch if/elif chain with registry-based loop. Replaced lambda with `def` in `_detect_from_config`. Added `OSError` guard to `os.listdir` call in C# config detection. Added return type annotations to `_get_collect_symbols_regex` in both `analyzers_ext.py` and `analyzers_ext2.py`. Eliminated double file reads in `CSharpAnalyzer` and `PhpAnalyzer` `analyze_imports` (single walk, cache sources). Optimized `GoAnalyzer.analyze_imports` from two walks to one. Optimized PHP namespace lookup with reverse index (O(1) vs O(n)). Removed redundant Dart `pick_test_cmd` branch. Simplified `utils.py` error detection case check. Moved `_SUPPORTED` set from inside `decompose()` to module-level `_SUPPORTED_LANGUAGES` frozenset. Simplified `__main__.py`. 230 tests pass (unchanged).
-- **3.2.0:** Six new language analyzers in new `analyzers_ext2.py` (~480 LOC): `CSharpAnalyzer` (.cs), `RubyAnalyzer` (.rb), `PhpAnalyzer` (.php), `SwiftAnalyzer` (.swift), `DartAnalyzer` (.dart), `ZigAnalyzer` (.zig). Total: 15 supported languages. Config-file detection expanded (Package.swift, build.zig, pubspec.yaml, .csproj/.sln, Gemfile, composer.json). Extension counting expanded (.cs, .rb, .php, .swift, .dart, .zig). `_ANALYZER_REGISTRY` expanded to 15 languages (python, typescript, javascript, go, rust, cpp, c, java, kotlin, csharp, ruby, php, swift, dart, zig). MCP `_LANGUAGES` list updated to match. All 6 new analyzers exported from `__init__.py`. 230 tests (15 new: symbols/imports for C#, Ruby, PHP, Swift, Dart, Zig + 6 config detection). All 21 sample repos re-tested: zero errors.
-- **3.1.0:** Abbreviation handling in recipe matching, analysis timing metadata, `estimate` MCP tool, iterative critical_path. New `_ABBREVIATIONS` dict in `utils.py` (~40 common coding abbreviations); `normalize_goal` expands abbreviations before verb synonyms, enabling recipe matching across abbreviated goals (e.g., "optimize GC" matches "optimize garbage collector" at 0.86+ similarity). `decompose` now returns `analysis_meta` with `language`, `scope`, `files_analyzed`, `dep_files`, `dep_edges`, `timing_s`, and optional `warning` for unsupported language fallbacks. New `estimate` MCP tool (21 tools total) for quick file count without full analysis. Converted recursive `critical_path` depth computation to iterative stack-based DFS with cycle detection (fixes stack overflow on deep graphs like Guava's 1.66M-edge Java import graph). 215 tests (5 new: 3 abbreviation, 1 analysis meta, 1 estimate tool).
-- **3.0.0:** Monorepo scope support + concurrent write safety. New `scope` parameter on `decompose`, `explore`, `plan_and_execute`, CLI (`--scope`), and MCP tools — limits analysis to a subdirectory while keeping the full project for test execution. Concurrent write safety validated with threading tests (4 threads × 5 ops on plans, recipes, constraints). `sample_file_test/` added to `.gitignore` and `_IGNORED_DIRS` for large-repo testing. 206 tests (6 new: 3 concurrent, 3 scope).
-- **2.9.0:** Plan resumption, recipe validation, config-file language detection, shared file-collection helper, `verify_step` gains `language` parameter, full MCP dispatch test coverage. New `get_plan_progress(plan_id)` in `store.py` returns accumulated edits from passed steps for plan resumption. New `validate_recipes(project_root)` in `store_recipes.py` checks recipe file entries against current project, removes stale entries, prunes fully-stale recipes. New `_detect_from_config(project_root)` in `analyzers.py` detects language from config files (Cargo.toml, go.mod, tsconfig.json, package.json, build.gradle, CMakeLists.txt, pyproject.toml) before falling back to extension counting. New `_collect_project_files(root, extensions)` shared helper in `utils.py` replaces duplicated file-walk patterns in TypeScriptAnalyzer, CppAnalyzer, RustAnalyzer. `explore_trajectories` now uses `_split_active_skipped` helper. `verify_step` MCP tool gains `language` parameter for language-specific test commands. New `resume` and `validate_recipes` MCP tools (20 tools total). 200 tests (17 new).
-- **2.8.0:** Codebase cleanup. Removed unused imports: `Any` from `analyzers.py`, `json` from `analyzers_ext.py`, `ExecutionHarness` and `dumps_json` from `test_strategies.py`. Replaced fragile lazy-import global in `analyzers_ext.py` with `functools.cache` (thread-safe, simpler). Fixed overly broad `BaseException` → `Exception` in transaction rollback (`utils.py`). Modernized transaction helper to use `conn.commit()`/`conn.rollback()` instead of raw SQL. Optimized `_order_cohesion` in `core.py` by pre-computing `comp_set` outside dict comprehension. Updated `SYSTEM_PROMPT.md`: tool count 17→18 (added `prune_recipes`), added C/C++ and Java/Kotlin to multi-language section. 175 tests (unchanged).
-- **2.7.0:** Store split + expanded analyzers + MCP prune tool. Extracted recipe methods into `store_recipes.py` as `RecipeStoreMixin` (~210 LOC); `RecipeStore` in `store.py` inherits from it (~342 LOC, down from 540). `CppAnalyzer` expanded from single function pattern to 5 targeted patterns (template functions, qualified functions, operator overloading, constructors/destructors, macro-prefixed functions). New `JavaAnalyzer._detect_source_roots(project_root)` reads `build.gradle`/`build.gradle.kts`/`pom.xml` for standard source directories; `analyze_imports` walks detected roots instead of project root. New `prune_recipes` MCP tool with `max_age_days` and `min_success_ratio` parameters (18 tools total). 175 tests (9 new: 5 C++ expansion, 3 Java source roots, 2 MCP prune, minus 1 renamed).
-- **2.6.0:** Parallel beams + new analyzers + module split. `plan_and_execute` runs beams concurrently via `ProcessPoolExecutor` (falls back to sequential). New `CppAnalyzer` (`.c/.cpp/.cc/.cxx/.h/.hpp/.hxx`, class/struct/namespace/enum/typedef/function symbols, `#include "..."` resolution with comment stripping) and `JavaAnalyzer` (`.java/.kt/.kts`, class/interface/enum/fun/object/@interface symbols, package-based import resolution) in new `analyzers_ext.py`. Analyzer module split: `analyzers.py` (~370 LOC) + `analyzers_ext.py` (~400 LOC) to stay under 500 LOC per file; all existing imports preserved via re-export. New `RecipeStore.prune_recipes(max_age_days=90, min_success_ratio=0.1)` removes stale recipes with cascade deletes. New `ExecutionHarness.prepare_base(project_root)` and `run_from_base(edits, base_dir)` for base-copy caching. New `--dry-run` flag (runs `explore()` instead of `plan_and_execute()`) and `--language` flag in CLI. `_apply_constraints` decomposed into `_parse_constraints`, `_mark_avoided`, `_inject_orderings`, `_mark_incompatible`, `_add_prerequisites`. MCP language enum expanded to 9 entries. `CppAnalyzer`, `JavaAnalyzer` exported from `__init__`. 166 tests (20 new).
-- **2.5.0:** Cleanup. Removed unused `import sys` from `harness.py`. Eliminated duplicate `set(symbols) | set(dep_graph)` computation in `Planner.decompose` (`core.py`; reuses `all_files` instead of computing identical `context_files` separately). Added defensive `json.loads` error handling in `retrieve_best_recipe` (`store.py`). Made failure default explicit in `get_strategy_stats` (`store.py`). Fixed `register_strategy` parameter order in `spec-project.md` documentation (`(name, description, fn)` not `(name, fn, description)`). 146 tests (unchanged).
-- **2.4.0:** Two new language analyzers + scoring improvements. New `GoAnalyzer` (regex-based, reads `go.mod` for module path, resolves internal imports) and `RustAnalyzer` (regex-based, resolves `use crate::` and `mod` declarations) in `analyzers.py`; shared `_collect_symbols_regex` helper for regex-based analyzers; `_strip_c_comments` for TS comment stripping before symbol/import detection; namespace pattern added to `_TS_SYMBOL_PATTERNS`. `detect_language` expanded to count `.go`/`.rs` files; registry now supports 5 languages. `_order_bottom_up` now stable-sorts by ascending dependency count; `_order_top_down` by descending; both genuinely use `dep_graph`. New `word_substring_score(a, b)` in `utils.py`; `goal_similarity` reweighted to 0.3 trigram cosine + 0.4 word Jaccard + 0.3 substring. `store.py` merged duplicated SQL branches, added recency weighting (30-day half-life); composite weights: text 0.4, files 0.25, success 0.15, recency 0.2; trimmed from 534 to 516 lines. `mcp_server.py` refactored with `_schema()`/`_prop()` helpers (507 → 255 lines), added "go" and "rust" to language enums. `GoAnalyzer`, `RustAnalyzer` exported from `__init__`. 146 tests (17 new: 4 Go, 3 Rust, 2 TS enhancement, 2 detection, 2 strategy, 4 matching).
-- **2.3.0:** Cleanup. Extracted `_split_active_skipped` helper in `core.py` (shared by all 6 strategy functions, eliminating duplicated active/skipped split). Modernized `_VERB_SYNONYMS` in `utils.py` from imperative loop to dict comprehension (eliminates leaked module-level variables). Fixed documentation errors: corrected canonical verb form examples (was "refactor", now correctly "restructure") and `register_strategy` parameter order in glossary and spec. 129 tests (unchanged).
-- **2.2.0:** Three features. (1) Improved recipe matching — `_VERB_SYNONYMS` dict (40+ verb variants → 9 canonical forms), `normalize_goal`, `word_jaccard`, `goal_similarity` (0.4 trigram cosine + 0.6 word Jaccard on normalized text) in `utils.py`; `save_recipe` normalizes before trigram indexing; `retrieve_best_recipe` uses `goal_similarity`; `_backfill_trigrams` renamed to `_rebuild_trigram_index` (rebuilds all trigrams with normalized text on init). (2) New beam strategies (6 total, 3 new) — `critical_path` (longest dependency chain first), `cohesion` (flood-fill connected components, largest first, toposort within), `minimal_change` (fewest symbols first). (3) TypeScript analyzer improvements — `_TS_SYMBOL_PATTERNS` list replacing single regex (interface, enum, const enum, type alias, abstract class, decorated class, function expression), expanded `_TS_IMPORT_RE` (re-exports, barrel exports, type re-exports, dynamic imports), `_TS_ALIAS_IMPORT_RE`, `_read_ts_path_aliases`, `_resolve_alias`, `.mts`/`.mjs` extensions. 129 tests (34 new).
-- **2.1.0:** Cleanup — removed dead `json` import from `core.py`, eliminated duplicated error patterns between `utils.py` and `PythonAnalyzer` (`PythonAnalyzer.error_patterns()` now returns shared `_ERROR_PATTERNS`), removed duplicated `_pick_test_cmd` from `harness.py` (falls back to `PythonAnalyzer.pick_test_cmd`), removed `analyze_imports` backward-compat wrapper from `utils.py` (callers use `PythonAnalyzer` directly). 95 tests (1 obsolete backward-compat test removed).
-- **2.0.0:** Reference LLM integration. New `SYSTEM_PROMPT.md` orchestration guide. New MCP tools: `update_plan_status`, `deactivate_constraint`. `status` tool includes `tools` count. 17 MCP tools total. 4 new tests; 96 total.
-- **1.9.0:** Structural recipe matching. New `recipe_files` table (7 tables total) with indexes. `save_recipe` populates file paths. `_backfill_files()` auto-migrates. `retrieve_best_recipe` accepts `context_files` for composite scoring (text 0.5, file overlap Jaccard 0.3, success ratio 0.2). Two-phase retrieval in `Planner.decompose`. New `list_recipes` MCP tool; `get_recipe` gains `context_files`. 16 MCP tools. 9 new tests; 92 total.
-- **1.8.0:** Multi-language support. New `trammel/analyzers.py`: `LanguageAnalyzer` protocol, `PythonAnalyzer`, `TypeScriptAnalyzer` (regex-based, stdlib-only), `detect_language()`, `get_analyzer()`. `Planner`/`ExecutionHarness` accept `analyzer`. `_collect_python_symbols` moved from `core.py` to `PythonAnalyzer`. `analyze_imports` wrapper in `utils.py`. `language` parameter on `plan_and_execute`/`explore`/MCP tools. `_IGNORED_DIRS` expanded. New `tests/test_analyzers.py` (13 tests). 83 total.
-- **1.7.0:** Pluggable strategy registry — `register_strategy()`/`get_strategies()`/`StrategyFn`/`StrategyEntry` in `core.py`, 3 built-in strategies auto-registered, unified signature `(steps, dep_graph) -> steps`. Strategy learning — `explore_trajectories` accepts optional `store`, strategies sorted by historical success rate. `get_strategy_stats()` on `RecipeStore`. New `list_strategies` MCP tool (14 total). `register_strategy`/`get_strategies` exported from `__init__`. New `tests/test_strategies.py` (8 tests, `TestBeamStrategies` moved from `test_trammel_extra.py`). 70 tests.
-- **1.6.0:** Cleanup — simplified `_collect_python_symbols` to return name strings (removed unused dict fields), removed dead `filepath` parameter from `_step_rationale`, inlined `_BEAM_STRATEGIES` descriptions (eliminated fragile index coupling), fixed duplicated line in spec-project.md. 62 tests.
-- **1.5.0:** Concurrent write protection (explicit transactions with BUSY retry), inverted trigram index for recipe retrieval at scale, constraint propagation (`_apply_constraints` enforcing avoid/dependency/incompatible/requires), constraint-aware beam strategies (skip/isolate/batch), RecipeStore context manager. 6 tables. 62 tests.
-- **1.4.0:** Cleanup — converted `mcp_stdio.py` from absolute to relative imports for package consistency, removed unreachable `UnicodeDecodeError` from `_collect_python_symbols` except clause (files opened with `errors="replace"`), added `.chisel` to `_IGNORED_DIRS`. 45 tests.
-- **1.3.0:** Cleanup — removed unused test imports (`explore`, `synthesize`, `analyze_imports`, `cosine`, `trigram_bag_cosine`, `trigram_signature`), removed dead `goal_slice` parameter from `_collect_python_symbols`, simplified `topological_sort` by removing redundant `.setdefault()`, fixed `plan_and_execute` API signature in spec docs. 45 tests.
-- **1.2.0:** `__version__` from `importlib.metadata`, `dispatch_tool` to `match/case`, configurable `test_cmd` in harness/CLI/MCP, recipe retrieval early termination, `tests/__init__.py`. 45 tests.
-- **1.1.0:** Cleanup — removed dead code (`advance_plan_step`, unused imports), consolidated duplicated ignored-dirs logic via `_is_ignored_dir` helper, fixed `egg-info` pattern, modernized `topological_sort` with `deque`, simplified `Planner.decompose` set construction. 45 tests.
-- **1.0.0:** Full rework — dependency-aware planning (import analysis + toposort), real beam branching (3 strategies), incremental verification, structured failure analysis, constraint propagation, enriched 5-table schema, MCP server (13 tools), 45 tests.
-- **0.3.0:** Min similarity threshold, async def support, filtered os.walk, dead code removal.
-- **0.2.0:** Recipe similarity fix (shared-vocabulary trigram cosine), `sys.executable`, beam edits carry `path`, `foreign_keys=ON`, `dumps_json`, `__version__`/`--version`.
-
-## Rust 4.0 tree (unreleased)
-
-| Path | Purpose |
-|------|---------|
-| `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` | Package 4.0.0, toolchain 1.99.1, lockfile names only `trammel` |
-| `src/main.rs`, `src/bin/trammel_mcp.rs`, `src/cli.rs`, `src/mcp.rs`, `src/tools.rs` | Both binaries, JSON CLI, stdio MCP |
-| `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/{json,kind}.rs` | Vendored stele parser core. `python_symbols` builds a newline index once so line numbers match the prefix scan without repeating it per identifier |
-| `src/lang/{code,symbols,imports,analyze,blank}.rs` | Hand-written extractors for the 15 languages |
-| `src/planner.rs`, `src/score.rs`, `src/goal.rs`, `src/strategies.rs`, `src/implicit.rs` | Decomposition |
-| `src/store.rs`, `src/migrate.rs` | Snapshot store and read-only SQLite import |
-| `src/harness.rs`, `src/export.rs`, `src/doctor.rs`, `src/benchstat.rs` | Verify, plan export, doctor, regression rule |
-| `scripts/parity_check.py`, `scripts/bench_gate.py`, `scripts/same_runner_bench.py` | Parity against Python 3.15.3, the recorded time floors, and a same-machine Python-vs-Rust run |
-| `bench/python_baseline.json`, `bench/rust_measured.json`, `bench/same_runner.json` | Recorded Python medians, the Rust startup sample, and the same-machine comparison |
-| `.github/workflows/release.yml` | On a `v*` tag: six binaries, `SHA256SUMS`, GitHub Release (`gh --repo`, no checkout), then npm (`./npm/<pkg>`, platforms before the wrapper). `workflow_dispatch` republishes an existing tag. Not run from a pull request. |
-| `npm/trammel`, `npm/trammel-*` | npm launcher published as `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `npx @iron_adamant/trammel`) and six `@iron_adamant/trammel-<os>-<arch>` packages. Commands stay `trammel` and `trammel-mcp`. Binaries are inserted by the release job. |
-| `schemas/*.schema.json` | One schema file per tool plus the envelope |
-| `AGENTS.md`, `docs/LLM_CONTRACT.md`, `llms.txt` | Agent guide and JSON contract |
-| `install.sh`, `install.ps1`, `server.json` | Install stubs and registry document; nothing is published |
+1. `trammel` or `trammel-mcp` enters `src/cli.rs` or `src/mcp.rs`.
+2. `src/tools.rs` opens `.trammel/` when the tool needs the store, then calls the planner, harness, or store.
+3. `src/lang/` and `src/syntax/` read the project. `src/implicit.rs` adds edges from `data/patterns.json`.
+4. `src/store.rs` writes `store` and appends `journal`.
+5. A `v*` tag runs `release.yml`, which builds the six binaries and publishes `./npm/*`.

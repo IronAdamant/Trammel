@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-const PATTERNS: &str = include_str!("../trammel/data/patterns.json");
+const PATTERNS: &str = include_str!("../data/patterns.json");
 
 pub struct Engine {
     rules: Vec<(String, Vec<(String, f64)>)>,
