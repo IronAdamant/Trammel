@@ -18,8 +18,8 @@ The old Python version lives on the `python-legacy` branch.
 - Breaks a goal into steps from the project's imports and symbols
 - Tries nine orderings (bottom-up, top-down, risk-first, and the rest)
 - Verifies an edit in an isolated copy, then runs the project's test command
-- Records a failure as a constraint so the same mistake is skipped later
-- Stores a successful strategy as a recipe
+- Records a failure as a constraint (`get_constraints` lists the active ones)
+- Stores a successful strategy as a recipe (`get_recipe` matches later goals by text similarity)
 - Coordinates several agents with step claims
 
 **15 languages:** Python, TypeScript, JavaScript, Go, Rust, C/C++, Java/Kotlin, C#, Ruby, PHP, Swift, Dart, Zig.
@@ -48,6 +48,18 @@ cargo build --release
 ```
 
 The Rust crate has no dependencies. `[dependencies]` in `Cargo.toml` stays empty.
+
+## Migrating from the Python version
+
+Trammel 3.15.3 is the last Python release. The package, its tests, and the PyPI workflow are on the `python-legacy` branch (`dc7deb335e91e5a29541733a234dfc1ed24788a3`). `main` is the 4.x Rust binary.
+
+Install 4.x with npm (`npm i -g @iron_adamant/trammel`, or `npx -y @iron_adamant/trammel mcp`) or from a GitHub Release (`sh install.sh` on Linux or macOS, `install.ps1` on Windows). There is no PyPI publish from this tree. The commands stay `trammel` and `trammel-mcp`.
+
+An existing `trammel.db` is not opened in place. `trammel migrate` copies it into `.trammel/` and leaves the SQLite file where it is.
+
+[MIGRATION.md](MIGRATION.md) lists the input, flag, error, output, tool, storage, and install differences. Each item is marked intentional change, bug fixed from Python, or not supported. The same file says what was run against both trees.
+
+What stays the same: the 12 primary tool names, the nine beam names and descriptions, the 15 language names, `.trammel.json` and `[tool.trammel]`, `format=trammel.plan` with `format_version` 1, and a 10 minute step claim.
 
 ## Benchmarks
 
@@ -132,8 +144,8 @@ trammel mcp
 1. **Decompose.** Build a dependency graph and an ordered list of steps.
 2. **Explore.** Run the nine beam orderings and keep the one you want.
 3. **Verify.** Copy the project, apply the edit, run a preflight, then the test command.
-4. **Constrain.** Store the failure so the next plan skips that approach.
-5. **Remember.** Save the strategy. Later goals are matched by text, files, and success ratio.
+4. **Constrain.** Store the failure on the constraint list.
+5. **Remember.** Save the strategy. `get_recipe` matches a later goal with the text blend (trigram cosine, word Jaccard, substring).
 
 State lives in `.trammel/` next to the project. `trammel doctor` prints the store path, languages, protocols, and the next useful command.
 
@@ -143,7 +155,7 @@ State lives in `.trammel/` next to the project. `trammel doctor` prints the stor
 |---------|-----|
 | `trammel-mcp` | Claude Code, Cursor, and any MCP client |
 | `trammel <tool>` | The same 32 tools, JSON on stdout |
-| `trammel GOAL` | Decompose, verify, and store in one run |
+| `trammel GOAL` | Decompose, then run the test command once per beam |
 | `.trammel/` | Plans, steps, constraints, recipes |
 
 ## Several agents
@@ -167,7 +179,7 @@ Project config is `.trammel.json`. A `[tool.trammel]` table in that project's `p
 }
 ```
 
-Test command order: the caller's `--test-cmd` or `test_cmd` argument, then the project file, then the language default.
+`verify_step` test command order: the caller's `test_cmd` argument, then the project file, then the language default. The goal command (`trammel GOAL`) is different; see [MIGRATION.md](MIGRATION.md).
 
 `export_plan` writes `format=trammel.plan`, `format_version=1`.
 
