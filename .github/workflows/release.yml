@@ -105,7 +105,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
             --title "$tag" \
-            --notes "Trammel ${tag}. Verify SHA256SUMS before installing. npm publish follows this job and needs the NPM_TOKEN repository secret."
+            --notes "Trammel ${tag}. Verify SHA256SUMS before installing. npm publish of @iron_adamant/trammel and the six @iron_adamant/trammel-<os>-<arch> packages follows this job and needs the NPM_TOKEN repository secret. Scoped packages are published with --access public."
 
   npm:
     name: npm registry
@@ -132,6 +132,7 @@ jobs:
             echo "NPM_TOKEN is not set. Add it as a repository secret. The value is not printed."
             exit 1
           fi
+          # @iron_adamant/* is restricted unless this flag is set.
           for asset in trammel-linux-x64 trammel-linux-arm64 trammel-darwin-x64 trammel-darwin-arm64 trammel-windows-x64 trammel-windows-arm64; do
             pkg="npm/${asset}"
             tar -xzf "dist/${asset}.tar.gz" -C "${pkg}" --strip-components=1

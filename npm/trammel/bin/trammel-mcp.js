@@ -5,12 +5,12 @@ const { spawn } = require("child_process");
 const path = require("path");
 
 const names = {
-  "linux-x64": "trammel-linux-x64",
-  "linux-arm64": "trammel-linux-arm64",
-  "darwin-x64": "trammel-darwin-x64",
-  "darwin-arm64": "trammel-darwin-arm64",
-  "win32-x64": "trammel-windows-x64",
-  "win32-arm64": "trammel-windows-arm64",
+  "linux-x64": "@iron_adamant/trammel-linux-x64",
+  "linux-arm64": "@iron_adamant/trammel-linux-arm64",
+  "darwin-x64": "@iron_adamant/trammel-darwin-x64",
+  "darwin-arm64": "@iron_adamant/trammel-darwin-arm64",
+  "win32-x64": "@iron_adamant/trammel-windows-x64",
+  "win32-arm64": "@iron_adamant/trammel-windows-arm64",
 };
 
 function binary() {
