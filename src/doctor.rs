@@ -28,7 +28,7 @@ pub fn report(start: &Path, store: Option<&Path>) -> Value {
         ("store_present", Value::Bool(dir.join("store").is_file())),
         ("legacy_sqlite", legacy.map(|p| Value::string(p.display().to_string())).unwrap_or(Value::Null)),
         ("languages", Value::Array(LANGUAGES.iter().copied().map(Value::string).collect())),
-        ("protocols", Value::Array(vec![Value::string("2026-07-28"), Value::string("2025-11-25"), Value::string("2025-06-18")])),
+        ("protocols", Value::Array(crate::mcp::PROTOCOLS.iter().copied().map(Value::string).collect())),
         ("config_found", Value::Bool(root.join(".trammel.json").is_file() || root.join("pyproject.toml").is_file())),
         ("telemetry", Value::Bool(config::telemetry_enabled(&cfg))),
         ("next_steps", Value::Array(next.into_iter().map(Value::String).collect())),

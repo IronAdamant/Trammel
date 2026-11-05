@@ -36,7 +36,7 @@ Those checks are std-only Rust in `examples/`, run from the repo root. No Python
 
 ## MCP
 
-The Rust server advertises **32 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 12. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
+The Rust server advertises **32 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 12. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
 
 ## Tied implicit edges
 

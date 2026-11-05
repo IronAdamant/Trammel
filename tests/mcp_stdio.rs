@@ -127,3 +127,15 @@ fn an_agent_can_fill_arguments_from_tools_list_and_act_on_errors() {
     assert_eq!(trammel::canon::as_str(at(&replies[7], &["result", "structuredContent", "code"])), Some("claim_held"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn initialize_echoes_every_published_protocol_it_supports() {
+    let dir = std::env::temp_dir();
+    for version in ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] {
+        let request = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"{version}","capabilities":{{}},"clientInfo":{{"name":"old","version":"0"}}}}}}"#);
+        let replies = session(&[request], &dir);
+        assert_eq!(trammel::canon::as_str(at(&replies[0], &["result", "protocolVersion"])), Some(version));
+    }
+    let unknown = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}"#.to_string();
+    assert_eq!(trammel::canon::as_str(at(&session(&[unknown], &dir)[0], &["result", "protocolVersion"])), Some("2025-11-25"));
+}

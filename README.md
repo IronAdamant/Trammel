@@ -54,7 +54,7 @@ Any client with a JSON config (Cursor, Claude Desktop, and others):
 }
 ```
 
-The server speaks stdio (protocols `2026-07-28`, `2025-11-25`, `2025-06-18`) and works on the project in its working directory; every tool also takes `project_root`. `tools/list` shows 12 primary tools with full input schemas. Set `TRAMMEL_MCP_SURFACE=all` in the server's environment to list all 32, including the multi-agent tools.
+The server speaks stdio (protocols `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`) and works on the project in its working directory; every tool also takes `project_root`. `tools/list` shows 12 primary tools with full input schemas. Set `TRAMMEL_MCP_SURFACE=all` in the server's environment to list all 32, including the multi-agent tools.
 
 A typical loop:
 
