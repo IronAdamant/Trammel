@@ -21,4 +21,4 @@ Terms for the 4.0.1 binary. Python-only names (the importable package, `trammel.
 | **Claim** | An agent holds a step. Claims expire after 10 minutes. |
 | **Export** | `export_plan` writes `format=trammel.plan`, `format_version` 1. |
 | **Doctor** | Local report: version, store path, languages, protocols, next step. No network. |
-| **Floor** | A recorded Python median in `scripts/bench_gate.py`. A Rust median at or above the floor fails CI. |
+| **Floor** | A recorded Python median in `examples/bench_gate.rs`. A Rust median at or above the floor fails CI. |
