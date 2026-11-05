@@ -13,7 +13,7 @@ cargo run --example check_no_todos
 cargo run --example check_syntax_core
 ```
 
-Those checks are std-only Rust in `examples/`, run from the repo root. No Python is needed to build, test, or check the repo; `src/migrate.rs` has one test that uses Python's `sqlite3` to write a 3.x database.
+Those checks are std-only Rust in `examples/`, run from the repo root. No Python is needed to build, test, or check the repo. The migrate tests read `tests/fixtures/trammel-3.15.3.db`, written once by python-legacy's `RecipeStore`.
 
 `trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.1",...}`.
 

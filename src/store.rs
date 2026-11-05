@@ -450,8 +450,16 @@ impl Store {
 
     pub fn document(&self) -> &Value { &self.doc }
 
+    /// Take over a whole document (a migrated 3.x database). Id counters
+    /// start after the highest id in each table, so new rows never reuse one.
     pub fn replace_document(&mut self, doc: Value) {
         self.doc = doc;
+        for (table, key) in [("plans", "plan"), ("steps", "step"), ("constraints", "constraint"), ("failures", "failure"), ("trajectories", "trajectory"), ("notes", "note")] {
+            let max = self.rows(table).iter().filter_map(|row| canon::get(row, "id").and_then(canon::as_i64)).max().unwrap_or(0);
+            let counter = format!("next_{key}");
+            let current = canon::get(&self.doc, &counter).and_then(canon::as_i64).unwrap_or(1);
+            canon::insert(&mut self.doc, &counter, Value::Int(current.max(max + 1)));
+        }
         self.touch();
     }
 }

@@ -127,10 +127,16 @@ fn program(name: &str) -> PathBuf {
 /// skipping Store aliases while any real install exists.
 pub fn python_cmd() -> Vec<String> {
     if !cfg!(windows) { return vec!["python3".into()]; }
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    windows_python(std::env::var_os("PATH").as_deref(), &pathext)
+}
+
+/// The Windows choice behind `python_cmd`, for a given PATH and PATHEXT.
+fn windows_python(path: Option<&std::ffi::OsStr>, pathext: &str) -> Vec<String> {
     for name in ["python3", "python"] {
-        if let Some((_, false)) = windows_lookup(name) { return vec![name.into()]; }
+        if let Some((_, false)) = find_program(name, path, pathext) { return vec![name.into()]; }
     }
-    if windows_lookup("py").is_some() { return vec!["py".into(), "-3".into()]; }
+    if find_program("py", path, pathext).is_some() { return vec!["py".into(), "-3".into()]; }
     vec!["python3".into()]
 }
 
@@ -325,10 +331,27 @@ mod tests {
         let dir = scratch("noop");
         let verdict = verify(&VerifyRequest { edits: vec![], root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
         assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(true), "{}", crate::canon::stable(&verdict));
-        let mut version = python_cmd();
-        version.push("--version".into());
-        let ran = run_cmd(&dir, &version, Duration::from_secs(20));
-        assert!(ran.success, "{version:?} did not run: {} {}", ran.output, ran.trace);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn windows_python_prefers_a_real_install_over_the_store_alias() {
+        let dir = scratch("pychoice");
+        let store = dir.join("Microsoft").join("WindowsApps");
+        let real = dir.join("Python313");
+        let launcher = dir.join("Windows");
+        for d in [&store, &real, &launcher] { fs::create_dir_all(d).unwrap(); }
+        fs::write(store.join("python3.exe"), b"").unwrap();
+        fs::write(store.join("python.exe"), b"").unwrap();
+        let ext = ".COM;.EXE;.BAT;.CMD";
+        let only_alias = std::env::join_paths([&store]).unwrap();
+        assert_eq!(windows_python(Some(&only_alias), ext), vec!["python3"]);
+        fs::write(launcher.join("py.exe"), b"").unwrap();
+        let alias_and_launcher = std::env::join_paths([&store, &launcher]).unwrap();
+        assert_eq!(windows_python(Some(&alias_and_launcher), ext), vec!["py", "-3"]);
+        fs::write(real.join("python.exe"), b"").unwrap();
+        let everything = std::env::join_paths([&store, &launcher, &real]).unwrap();
+        assert_eq!(windows_python(Some(&everything), ext), vec!["python"]);
         let _ = fs::remove_dir_all(&dir);
     }
 }

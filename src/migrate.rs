@@ -15,19 +15,25 @@ pub fn import_database(path: &Path) -> Result<Value, String> {
     let reserved = bytes[20] as usize;
     let master = table_rows(&bytes, page_size, reserved, 1)?;
     let mut tables: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for row in &master {
+    for (_, row) in &master {
         let typ = cell_text(row.first()).unwrap_or("");
         let name = cell_text(row.get(1)).unwrap_or("");
         if typ != "table" || name.starts_with("sqlite_") { continue; }
         let Some(root) = cell_int(row.get(3)) else { continue };
         if root < 1 { continue; }
-        let columns = row.get(4).and_then(|cell| cell_text(Some(cell))).map(column_names).unwrap_or_default();
+        let sql = row.get(4).and_then(|cell| cell_text(Some(cell))).unwrap_or("");
+        let columns = column_names(sql);
+        let rowid_column = rowid_alias(sql);
+        let mut rows = table_rows(&bytes, page_size, reserved, root as usize)?;
+        rows.sort_by_key(|(rowid, _)| *rowid);
         let mut records = Vec::new();
-        for record in table_rows(&bytes, page_size, reserved, root as usize)? {
+        for (rowid, record) in rows {
             let mut object = Vec::new();
             for (index, cell) in record.iter().enumerate() {
                 let key = columns.get(index).cloned().unwrap_or_else(|| format!("c{index}"));
-                object.push((key, cell_value(cell)));
+                // SQLite keeps an INTEGER PRIMARY KEY in the rowid and stores NULL in the record.
+                let value = if Some(index) == rowid_column && matches!(cell, Cell::Null) { Value::Int(rowid) } else { cell_value(cell) };
+                object.push((key, value));
             }
             records.push(Value::Object(object));
         }
@@ -66,7 +72,7 @@ fn page_size_of(bytes: &[u8]) -> Result<usize, String> {
 #[derive(Clone, Debug)]
 enum Cell { Null, Int(i64), Float(f64), Text(String), Blob }
 
-fn table_rows(bytes: &[u8], page_size: usize, reserved: usize, root: usize) -> Result<Vec<Vec<Cell>>, String> {
+fn table_rows(bytes: &[u8], page_size: usize, reserved: usize, root: usize) -> Result<Vec<(i64, Vec<Cell>)>, String> {
     let mut rows = Vec::new();
     let mut stack = vec![root];
     let mut guard = 0;
@@ -91,8 +97,8 @@ fn table_rows(bytes: &[u8], page_size: usize, reserved: usize, root: usize) -> R
             let cell_off = u16::from_be_bytes([page[at], page[at + 1]]) as usize;
             if interior {
                 if let Some(child) = interior_child(page, cell_off) { stack.push(child); }
-            } else if let Some(payload) = leaf_payload(bytes, page, page_size, reserved, cell_off) {
-                rows.push(decode_record(&payload));
+            } else if let Some((rowid, payload)) = leaf_payload(bytes, page, page_size, reserved, cell_off) {
+                rows.push((rowid, decode_record(&payload)));
             }
         }
     }
@@ -112,9 +118,9 @@ fn interior_child(page: &[u8], off: usize) -> Option<usize> {
     Some(u32::from_be_bytes([page[off], page[off + 1], page[off + 2], page[off + 3]]) as usize)
 }
 
-fn leaf_payload(file: &[u8], page: &[u8], page_size: usize, reserved: usize, off: usize) -> Option<Vec<u8>> {
+fn leaf_payload(file: &[u8], page: &[u8], page_size: usize, reserved: usize, off: usize) -> Option<(i64, Vec<u8>)> {
     let (payload_size, next) = read_varint(page, off)?;
-    let (_rowid, next) = read_varint(page, next)?;
+    let (rowid, next) = read_varint(page, next)?;
     let payload_size = payload_size as usize;
     let local = local_payload(page_size, reserved, payload_size);
     if next + local > page.len() { return None; }
@@ -132,7 +138,7 @@ fn leaf_payload(file: &[u8], page: &[u8], page_size: usize, reserved: usize, off
         }
     }
     payload.truncate(payload_size);
-    Some(payload)
+    Some((rowid as i64, payload))
 }
 
 fn local_payload(page_size: usize, reserved: usize, payload: usize) -> usize {
@@ -212,6 +218,16 @@ fn read_varint(data: &[u8], mut i: usize) -> Option<(u64, usize)> {
     None
 }
 
+/// Index of the column declared `INTEGER PRIMARY KEY`, the rowid alias.
+fn rowid_alias(sql: &str) -> Option<usize> {
+    let (start, end) = (sql.find('(')?, sql.rfind(')')?);
+    sql[start + 1..end]
+        .split(',')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .filter(|lower| !(lower.is_empty() || lower.starts_with("primary ") || lower.starts_with("unique ") || lower.starts_with("constraint ") || lower.starts_with("foreign ")))
+        .position(|lower| lower.split_whitespace().collect::<Vec<_>>().windows(3).any(|w| w == ["integer", "primary", "key"]))
+}
+
 fn column_names(sql: &str) -> Vec<String> {
     let Some(start) = sql.find('(') else { return Vec::new() };
     let Some(end) = sql.rfind(')') else { return Vec::new() };
@@ -265,39 +281,41 @@ fn apply_wal(db_path: &Path, bytes: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
-    /// First interpreter that really runs Python with sqlite3. On Windows `python3` is often
-    /// the Microsoft Store alias, which exists on PATH but exits 49 without running anything.
-    fn python_with_sqlite() -> Vec<&'static str> {
-        let candidates: [&[&str]; 3] = [&["python3"], &["python"], &["py", "-3"]];
-        for argv in candidates {
-            let ok = Command::new(argv[0])
-                .args(&argv[1..])
-                .args(["-c", "import sqlite3"])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-            if ok {
-                return argv.to_vec();
-            }
-        }
-        panic!("this test needs Python 3 with sqlite3 as python3, python, or py -3");
+    /// A real 3.15.3 database, written by python-legacy's `RecipeStore`
+    /// (one recipe, one plan with two steps, a constraint, two trajectories).
+    fn fixture() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/trammel-3.15.3.db")
     }
 
     #[test]
     fn reads_a_python_sqlite_database() {
-        let dir = std::env::temp_dir().join(format!("trammel-sqlite-{}", std::process::id()));
+        let doc = import_database(&fixture()).unwrap();
+        for (table, rows) in [("recipes", 1), ("plans", 1), ("steps", 2), ("constraints", 1), ("trajectories", 2)] {
+            assert_eq!(row_count(&doc, table), rows, "{table}");
+        }
+        let plan = &crate::canon::get(&doc, "plans").and_then(crate::canon::as_array).unwrap()[0];
+        assert_eq!(crate::canon::get(plan, "goal").and_then(crate::canon::as_str), Some("add a low-stock report"));
+    }
+
+    #[test]
+    fn a_migrated_store_keeps_ids_and_history() {
+        let dir = std::env::temp_dir().join(format!("trammel-migrated-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let db = dir.join("sample.db");
-        // The path goes in argv, not the source text: Rust's Debug quoting is not a Python literal.
-        let script = "import sqlite3, sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table recipes (sig text primary key, pattern text)'); c.execute('insert into recipes values (?, ?)', ('abc', 'hello goal')); c.commit()";
-        let python = python_with_sqlite();
-        let status = Command::new(python[0]).args(&python[1..]).arg("-c").arg(script).arg(&db).status().unwrap();
-        assert!(status.success());
-        let doc = import_database(&db).unwrap();
-        assert_eq!(row_count(&doc, "recipes"), 1);
+        let store_dir = dir.join(".trammel");
+        {
+            let mut store = crate::store::Store::open(&store_dir).unwrap();
+            store.replace_document(import_database(&fixture()).unwrap());
+            // New rows must not reuse the migrated ids.
+            let next = store.create_plan("another goal", &crate::canon::obj(vec![]));
+            assert_eq!(next, 2);
+        }
+        let args = crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("plan_id", Value::Int(1))]);
+        let history = crate::tools::call("history", &args, &dir, Some(&store_dir), false).unwrap();
+        assert_eq!(crate::canon::get(&history, "trajectories").and_then(crate::canon::as_array).map(|t| t.len()), Some(2));
+        let plan = crate::tools::call("get_plan", &args, &dir, Some(&store_dir), false).unwrap();
+        assert_eq!(crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).map(|s| s.len()), Some(2));
         let _ = fs::remove_dir_all(&dir);
     }
 }
