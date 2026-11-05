@@ -67,7 +67,7 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             let id = required_i64(args, "plan_id")?;
             let store = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?;
             let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
-            if name == "history" { Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(vec![]))])) } else { Ok(plan) }
+            if name == "history" { Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(vec![]))])) } else { Ok(lean_plan(plan)) }
         }
         "list_plans" => {
             if crate::canon::get(args, "db_path").is_some() {
@@ -224,6 +224,29 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
         ("persisted", Value::Bool(true)),
         ("workflow", Value::string("start_plan")),
     ]))
+}
+
+/// The reply for get_plan and resume. The stored strategy repeats every step
+/// (about half the bytes) without status or claims, so the reply leaves that
+/// copy out; `steps` is the live list. `depends_on` is stored as JSON text and
+/// goes out as an array of step indexes.
+fn lean_plan(mut plan: Value) -> Value {
+    if let Some(strategy) = crate::canon::get(&plan, "strategy").cloned() {
+        if let Value::Object(fields) = strategy {
+            let kept = fields.into_iter().filter(|(k, _)| k != "steps").collect();
+            crate::canon::insert(&mut plan, "strategy", Value::Object(kept));
+        }
+    }
+    if let Some(Value::Array(steps)) = crate::canon::get(&plan, "steps").cloned() {
+        let steps = steps.into_iter().map(|mut step| {
+            if let Some(parsed) = crate::canon::get(&step, "depends_on").and_then(crate::canon::as_str).and_then(|t| crate::json::parse(t).ok()) {
+                crate::canon::insert(&mut step, "depends_on", parsed);
+            }
+            step
+        }).collect();
+        crate::canon::insert(&mut plan, "steps", Value::Array(steps));
+    }
+    plan
 }
 
 fn complete(args: &Value, store: &mut Store) -> Result<Value, Failure> {
@@ -392,6 +415,15 @@ mod tests {
         let id = crate::canon::get(&reply, "plan_id").cloned().unwrap();
         let plan = call("get_plan", &crate::canon::obj(vec![root, ("plan_id", id)]), &dir, Some(&store), false).unwrap();
         assert_eq!(crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).map(|s| s.len()), Some(2));
+        // The reply has one list of steps, with depends_on as an array.
+        assert!(crate::canon::get(&plan, "strategy").and_then(|s| crate::canon::get(s, "steps")).is_none());
+        let second = &crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).unwrap()[1];
+        assert_eq!(crate::canon::stable(crate::canon::get(second, "depends_on").unwrap()), "[0]");
+        // complete_plan still saves the full strategy as the recipe.
+        let id = crate::canon::get(&plan, "id").cloned().unwrap();
+        call("complete_plan", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("plan_id", id)]), &dir, Some(&store), false).unwrap();
+        let recipe = call("get_recipe", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("goal", Value::string("add stock to Item"))]), &dir, Some(&store), false).unwrap();
+        assert_eq!(crate::canon::get(&recipe, "strategy").and_then(|s| crate::canon::get(s, "steps")).and_then(crate::canon::as_array).map(|s| s.len()), Some(2));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
