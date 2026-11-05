@@ -49,7 +49,7 @@ pub fn verify(request: &VerifyRequest) -> Value {
     }
     let tmp = scratch_dir();
     let _ = fs::remove_dir_all(&tmp);
-    if let Err(err) = copy_tree(&request.root, &tmp) {
+    if let Err(err) = copy_project(&request.root, &tmp, git_files(&request.root)) {
         return fail(&err, static_analysis, preflight);
     }
     for (path, content) in &request.edits {
@@ -251,6 +251,47 @@ fn fail(message: &str, static_analysis: Value, preflight: Value) -> Value {
     ])
 }
 
+/// The files git would commit under `root`: tracked ones plus untracked ones
+/// that no .gitignore excludes. None when git is missing or `root` is not in
+/// a work tree.
+fn git_files(root: &Path) -> Option<Vec<String>> {
+    let out = Command::new(program("git"))
+        .arg("-C").arg(root)
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut files: Vec<String> = text.split('\0').filter(|p| !p.is_empty()).map(String::from).collect();
+    files.sort();
+    files.dedup();
+    Some(files)
+}
+
+/// Copy the project for a verify run. In a git work tree only `files` (from
+/// `git_files`) are copied, so ignored build output, datasets and caches
+/// stay behind; elsewhere the whole tree is walked, skipping the usual
+/// generated directories. The Trammel store is never copied.
+fn copy_project(src: &Path, dst: &Path, files: Option<Vec<String>>) -> Result<(), String> {
+    let Some(files) = files else { return copy_tree(src, dst) };
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for rel in files {
+        if rel.split('/').next() == Some(".trammel") { continue; }
+        let from = src.join(&rel);
+        let to = dst.join(&rel);
+        if from.is_dir() {
+            // A submodule: git lists its path, not its files.
+            copy_tree(&from, &to)?;
+        } else if from.is_file() {
+            if let Some(parent) = to.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+            fs::copy(&from, &to).map_err(|e| format!("{rel}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     let entries = fs::read_dir(src).map_err(|e| e.to_string())?;
@@ -290,6 +331,53 @@ mod tests {
         let verdict = verify(&VerifyRequest { edits: fixed, root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
         assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(true), "{}", crate::canon::stable(&verdict));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write(root: &Path, rel: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, rel).unwrap();
+    }
+
+    fn listed(root: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() { stack.push(path); } else { out.push(crate::walk::rel_slash(&path, root)); }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn verify_copies_what_git_would_commit_and_skips_ignored_files() {
+        let src = scratch("gitcopy-src");
+        let run = |args: &[&str]| assert!(Command::new("git").arg("-C").arg(&src).args(args).output().unwrap().status.success(), "git {args:?}");
+        run(&["init", "-q"]);
+        fs::write(src.join(".gitignore"), "gallery-full/\n*.log\n").unwrap();
+        for rel in ["src/lib.rs", "gallery-full/shot_001.png", "run.log", "notes/new_untracked.md", ".trammel/store"] { write(&src, rel); }
+        run(&["add", ".gitignore", "src/lib.rs"]);
+        let files = git_files(&src).expect("a git work tree");
+        assert_eq!(files, vec![".gitignore", ".trammel/store", "notes/new_untracked.md", "src/lib.rs"]);
+        let dst = scratch("gitcopy-dst");
+        copy_project(&src, &dst, Some(files)).unwrap();
+        assert_eq!(listed(&dst), vec![".gitignore", "notes/new_untracked.md", "src/lib.rs"], "ignored files, .git and the store stay behind");
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn outside_git_the_whole_tree_is_copied_minus_generated_dirs() {
+        let src = scratch("walkcopy-src");
+        for rel in ["src/lib.rs", "target/debug/big.bin", "node_modules/x/index.js", "data/table.csv", ".trammel/store"] { write(&src, rel); }
+        let dst = scratch("walkcopy-dst");
+        copy_project(&src, &dst, None).unwrap();
+        assert_eq!(listed(&dst), vec!["data/table.csv", "src/lib.rs"]);
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&dst);
     }
 
     #[test]
