@@ -16,6 +16,7 @@ The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 de
 - New primary tool `add_note`: free-text handoff notes on a plan, returned by `get_plan` and `resume`.
 - `prune_recipes`, `prune_plans` and `validate_recipes` do what they say (3.x rules) instead of returning `removed: 0`. `history` returns trajectories; the goal command records one per beam and closes its plan.
 - After `trammel migrate`, new rows get ids after the migrated ones instead of reusing 1, 2, ... The migrate tests read a committed 3.15.3 database, so the test suite needs no Python.
+- `SYSTEM_PROMPT.md` is rewritten for the 4.x tools: the loop, handoff with notes, several agents, conventions, and a tool reference generated from `tools/list`.
 - `list_plans` returns seven-field summaries, newest first, not every stored column. Python-era wording is gone from errors: the `strict_greenfield` rejection and the repo checks (no tracebacks; see MIGRATION.md, Repo checks).
 - `get_recipe` matches paraphrases (stemming, stopwords, relation words, the recipe's files and symbols as half-weight context).
 - The repo checks are std-only Rust (`cargo run --example ...`), replacing `scripts/*.py`.
