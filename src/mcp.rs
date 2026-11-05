@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// same thing in all of them (fields a revision lacks are ignored by clients).
 pub const PROTOCOLS: &[&str] = &["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Trammel plans multi-file changes in dependency order and keeps plans, constraints, failures and recipes in .trammel/ so later sessions and other agents can pick work up. Loop: get_constraints and get_recipe, start_plan, then per step verify_step (tests run on a temporary copy), then complete_plan. To hand off, the next agent calls get_plan with the plan_id. TRAMMEL_MCP_SURFACE=all adds claim_step, available_steps and record_steps for several agents on one plan.";
+const INSTRUCTIONS: &str = "Trammel plans multi-file changes in dependency order and keeps plans, constraints, failures and recipes in .trammel/ so later sessions and other agents can pick work up. Loop: get_constraints and get_recipe, start_plan, then per step verify_step (tests run on a temporary copy), then complete_plan. To hand off, add_note what you did and what is left; the next agent calls get_plan with the plan_id and reads the notes. TRAMMEL_MCP_SURFACE=all adds claim_step, available_steps and record_steps for several agents on one plan.";
 
 pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     let stdin = io::stdin();

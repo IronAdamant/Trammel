@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-04
 **Version:** 4.0.1 (Rust binary and npm). The old Python version lives on the `python-legacy` branch.
-**Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 32 MCP tools, 12 primary. Store is `.trammel/`.
+**Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 33 MCP tools, 13 primary. Store is `.trammel/`.
 
 ## Removed from main
 

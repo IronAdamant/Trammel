@@ -35,7 +35,7 @@ The repo checks are std-only Rust in `examples/` (the Python scripts they replac
 
 ## MCP
 
-The server advertises **32 tools**. Primary surface is 12 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included.
+The server advertises **33 tools**. Primary surface is 13 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included.
 
 ## Add a language
 

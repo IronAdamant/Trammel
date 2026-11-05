@@ -25,7 +25,7 @@ trammel mcp
    - **server_label**: `trammel`
    - **server_description**: "Planning harness for coding agents: dependency-aware decomposition, beam strategy, verification, and recipe memory"
 
-Grok discovers the tools from the server. The default list is 12 primary tools. `TRAMMEL_MCP_SURFACE=all` lists all 32.
+Grok discovers the tools from the server. The default list is 13 primary tools. `TRAMMEL_MCP_SURFACE=all` lists all 33.
 
 ## For Grok Build (Local)
 

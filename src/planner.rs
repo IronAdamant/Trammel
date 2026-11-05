@@ -317,12 +317,18 @@ pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: O
     let steps = canon::get(&strategy, "steps").and_then(canon::as_array).unwrap_or(&[]).to_vec();
     let graph = graph_from(Some(&graph_value_from_strategy(&strategy)));
     let beams = strategies::explore(&steps, &graph, request.num_beams.max(1), &BTreeMap::new());
-    if let Some(dir) = store_dir {
-        let mut store = crate::store::Store::open(dir)?;
-        let id = store.create_plan(&request.goal, &strategy);
-        store.update_plan_status(id, "running");
-        store.save()?;
-    }
+    // Like 3.x: the run is a plan; each beam's outcome becomes a trajectory
+    // (`history`), and the plan ends completed or failed.
+    let plan_id = match store_dir {
+        Some(dir) => {
+            let mut store = crate::store::Store::open(dir)?;
+            let id = store.create_plan(&request.goal, &strategy);
+            store.update_plan_status(id, "running");
+            store.save()?;
+            Some(id)
+        }
+        None => None,
+    };
     let cmd = test_cmd.map(|c| c.to_vec()).filter(|c| !c.is_empty()).unwrap_or_else(|| {
         analyze::test_cmd(request.language.as_deref().unwrap_or("python"), &request.root)
     });
@@ -348,8 +354,23 @@ pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: O
         }
     });
     let success = outcomes.iter().all(|item| canon::get(item, "success").and_then(canon::as_bool).unwrap_or(false));
+    if let (Some(dir), Some(id)) = (store_dir, plan_id) {
+        let mut store = crate::store::Store::open(dir)?;
+        for (beam, outcome) in beams.iter().zip(&outcomes) {
+            let passed = canon::get(outcome, "success").and_then(canon::as_bool).unwrap_or(false);
+            let steps_done = canon::get(beam, "steps").and_then(canon::as_array).map(|s| s.len() as i64).unwrap_or(0);
+            let reason = if passed { None } else { canon::get(outcome, "trace").and_then(canon::as_str).and_then(|t| t.lines().map(str::trim).find(|l| !l.is_empty() && !l.chars().all(|c| c == '-' || c == '='))) };
+            let variant = canon::get(beam, "variant").and_then(canon::as_str).unwrap_or("default");
+            let beam_id = canon::get(beam, "beam_id").and_then(canon::as_i64).unwrap_or(0);
+            store.log_trajectory(id, beam_id, variant, if passed { steps_done } else { 0 }, passed, reason);
+        }
+        if success { store.save_recipe(&request.goal, &strategy, true); }
+        store.update_plan_status(id, if success { "completed" } else { "failed" });
+        store.save()?;
+    }
     Ok(canon::obj(vec![
         ("goal", Value::string(request.goal.clone())),
+        ("plan_id", plan_id.map(Value::Int).unwrap_or(Value::Null)),
         ("strategy", strategy),
         ("beams", Value::Int(beams.len() as i64)),
         ("success", Value::Bool(success)),
@@ -383,6 +404,40 @@ mod cap_tests {
         // Without keywords the cap keeps the first files in dependency order.
         let plain = keep_most_relevant((0..20).map(|i| format!("f{i:02}")).collect::<Vec<String>>(), 3, &BTreeMap::new(), &BTreeMap::new(), &BTreeSet::new());
         assert_eq!(plain, vec!["f00", "f01", "f02"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+
+    #[test]
+    fn the_goal_command_records_a_plan_history_and_closes_the_plan() {
+        let dir = std::env::temp_dir().join(format!("trammel-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app.py"), "def main():\n    return 1\n").unwrap();
+        let store = dir.join(".trammel");
+        let mut request = Request::new("update main in app", dir.clone());
+        request.num_beams = 2;
+        let pass = crate::harness::no_op_cmd();
+        let result = plan_and_execute(&request, Some(&store), Some(&pass)).unwrap();
+        let id = canon::get(&result, "plan_id").and_then(canon::as_i64).unwrap();
+        let fail: Vec<String> = if cfg!(windows) { vec!["cmd".into(), "/C".into(), "echo boom 1>&2 & exit 3".into()] } else { vec!["sh".into(), "-c".into(), "echo boom >&2; exit 3".into()] };
+        let failed = plan_and_execute(&request, Some(&store), Some(&fail)).unwrap();
+        let failed_id = canon::get(&failed, "plan_id").and_then(canon::as_i64).unwrap();
+        let store = crate::store::Store::open(&store).unwrap();
+        let plan = store.get_plan(id).unwrap();
+        assert_eq!(canon::get(&plan, "status").and_then(canon::as_str), Some("completed"));
+        let runs = store.trajectories(id);
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|t| canon::get(t, "success").and_then(canon::as_bool) == Some(true)));
+        assert_eq!(canon::get(&store.get_plan(failed_id).unwrap(), "status").and_then(canon::as_str), Some("failed"));
+        let reason = store.trajectories(failed_id).first().and_then(|t| canon::get(t, "failure_reason").and_then(canon::as_str).map(String::from));
+        assert_eq!(reason.as_deref(), Some("boom"));
+        assert!(store.best_recipe("update main in app", 0.55).is_some());
+        drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

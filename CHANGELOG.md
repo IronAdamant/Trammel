@@ -13,6 +13,8 @@ The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 de
 - `initialize` echoes `2025-03-26` and `2024-11-05` as well, so older SDK clients connect.
 - `verify_step` preflight is language-aware (no false alarms on 1,242 real files) and a failed preflight is `success: false`, without running tests. Large non-Python files preflight in linear time.
 - `available_steps` only offers steps whose dependencies are passed or skipped.
+- New primary tool `add_note`: free-text handoff notes on a plan, returned by `get_plan` and `resume`.
+- `prune_recipes`, `prune_plans` and `validate_recipes` do what they say (3.x rules) instead of returning `removed: 0`. `history` returns trajectories; the goal command records one per beam and closes its plan.
 - `get_recipe` matches paraphrases (stemming, stopwords, relation words, the recipe's files and symbols as half-weight context).
 - The repo checks are std-only Rust (`cargo run --example ...`), replacing `scripts/*.py`.
 

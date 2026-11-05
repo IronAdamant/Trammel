@@ -15,6 +15,7 @@ use std::time::Duration;
 pub const PRIMARY: &[&str] = &[
     "start_plan", "decompose", "get_plan", "complete_plan", "verify_step", "get_recipe",
     "save_recipe", "status", "resume", "export_plan", "get_constraints", "add_constraint",
+    "add_note",
 ];
 
 pub fn all_names() -> Vec<&'static str> {
@@ -23,7 +24,7 @@ pub fn all_names() -> Vec<&'static str> {
         "update_plan_status", "complete_plan", "export_plan", "verify_step", "verify_plan",
         "record_steps", "claim_step", "release_step", "available_steps", "save_recipe",
         "get_recipe", "list_recipes", "prune_recipes", "validate_recipes", "list_strategies",
-        "add_constraint", "get_constraints", "deactivate_constraint", "failure_history",
+        "add_constraint", "get_constraints", "deactivate_constraint", "failure_history", "add_note",
         "resolve_failure", "status", "estimate", "usage_stats", "history", "list_plans",
         "prune_plans",
     ];
@@ -67,7 +68,7 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             let id = required_i64(args, "plan_id")?;
             let store = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?;
             let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
-            if name == "history" { Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(vec![]))])) } else { Ok(lean_plan(plan)) }
+            if name == "history" { Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(store.trajectories(id)))])) } else { Ok(lean_plan(plan)) }
         }
         "list_plans" => {
             if crate::canon::get(args, "db_path").is_some() {
@@ -121,7 +122,33 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             }
         }
         "list_recipes" => Ok(Value::Array(store.unwrap().list_recipes(crate::canon::get(args, "limit").and_then(crate::canon::as_i64).unwrap_or(50) as usize))),
-        "prune_recipes" | "prune_plans" | "validate_recipes" => Ok(crate::canon::obj(vec![("removed", Value::Int(0))])),
+        "add_note" => {
+            let plan = required_i64(args, "plan_id")?;
+            let text = required_str(args, "text")?;
+            let store = store.unwrap();
+            if store.get_plan(plan).is_none() { return Err(Failure::new("plan_not_found", format!("plan {plan} was not found"), "Call list_plans for valid plan ids")); }
+            let agent = crate::canon::get(args, "agent_id").and_then(crate::canon::as_str);
+            let step = crate::canon::get(args, "step_id").and_then(crate::canon::as_i64);
+            Ok(crate::canon::obj(vec![("note_id", Value::Int(store.add_note(plan, &text, agent, step)))]))
+        }
+        "prune_plans" => {
+            let days = crate::canon::get(args, "max_age_days").and_then(crate::canon::as_f64).unwrap_or(7.0);
+            let status = match crate::canon::get(args, "status") {
+                Some(Value::Null) => None,
+                Some(value) => crate::canon::as_str(value).map(String::from),
+                None => Some("pending".to_string()),
+            };
+            Ok(crate::canon::obj(vec![("removed", Value::Int(store.unwrap().prune_plans(days, status.as_deref()) as i64))]))
+        }
+        "prune_recipes" => {
+            let days = crate::canon::get(args, "max_age_days").and_then(crate::canon::as_f64).unwrap_or(90.0);
+            let ratio = crate::canon::get(args, "min_success_ratio").and_then(crate::canon::as_f64).unwrap_or(0.1);
+            Ok(crate::canon::obj(vec![("removed", Value::Int(store.unwrap().prune_recipes(days, ratio) as i64))]))
+        }
+        "validate_recipes" => {
+            let (checked, missing, removed) = store.unwrap().validate_recipes(root);
+            Ok(crate::canon::obj(vec![("recipes_checked", Value::Int(checked as i64)), ("files_missing", Value::Int(missing as i64)), ("removed", Value::Int(removed as i64))]))
+        }
         "list_strategies" => Ok(Value::Array(strategies::builtin().iter().map(|s| crate::canon::obj(vec![("name", Value::string(s.name)), ("description", Value::string(s.description)), ("successes", Value::Int(0)), ("failures", Value::Int(0))])).collect())),
         "estimate" => {
             let cfg = config::load(root);
@@ -231,6 +258,8 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
 /// copy out; `steps` is the live list. `depends_on` is stored as JSON text and
 /// goes out as an array of step indexes.
 fn lean_plan(mut plan: Value) -> Value {
+    // `scaffold` is always the text "[]": a 3.x column with no 4.x writer.
+    if let Value::Object(fields) = &mut plan { fields.retain(|(k, _)| k != "scaffold"); }
     if let Some(strategy) = crate::canon::get(&plan, "strategy").cloned() {
         if let Value::Object(fields) = strategy {
             let kept = fields.into_iter().filter(|(k, _)| k != "steps").collect();
@@ -388,13 +417,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rust_surface_is_32_tools_including_verify_plan() {
+    fn rust_surface_is_33_tools_including_verify_plan() {
         let names = all_names();
-        assert_eq!(names.len(), 32, "{names:?}");
+        assert_eq!(names.len(), 33, "{names:?}");
         assert!(names.contains(&"verify_plan"));
         assert!(!names.contains(&"record_step"));
         assert!(!names.contains(&"create_plan"));
-        assert_eq!(PRIMARY.len(), 12);
+        assert_eq!(PRIMARY.len(), 13);
         assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
     }
 

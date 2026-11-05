@@ -19,7 +19,7 @@ Give it a goal and a project. It reads the imports and symbols, orders the files
 |---|---|
 | `start_plan` / `decompose` | One call returns the files a goal touches, in dependency order, with their symbols and goal relevance. |
 | `verify_step` | Edits applied to a throwaway copy, a syntax preflight, and the project's tests, without touching the working tree. Output is capped at 4 KB. |
-| `get_plan` | A saved plan with step status and claims: how a new session or a sub-agent picks up work cold. |
+| `get_plan` / `add_note` | A saved plan with step status, claims, and the previous agent's notes: how a new session or a sub-agent picks up work cold. |
 | `add_constraint` / `get_constraints` | Rules and known-bad approaches that every later agent reads before editing. |
 | `claim_step` / `available_steps` / `record_steps` | Several agents on one plan without doing the same step twice. Claims expire after 10 minutes. |
 | `complete_plan` / `get_recipe` | A strategy that worked, matched to later goals by text similarity. |
@@ -54,7 +54,7 @@ Any client with a JSON config (Cursor, Claude Desktop, and others):
 }
 ```
 
-The server speaks stdio (protocols `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`) and works on the project in its working directory; every tool also takes `project_root`. `tools/list` shows 12 primary tools with full input schemas. Set `TRAMMEL_MCP_SURFACE=all` in the server's environment to list all 32, including the multi-agent tools.
+The server speaks stdio (protocols `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`) and works on the project in its working directory; every tool also takes `project_root`. `tools/list` shows 13 primary tools with full input schemas. Set `TRAMMEL_MCP_SURFACE=all` in the server's environment to list all 33, including the multi-agent tools.
 
 A typical loop:
 
@@ -63,7 +63,7 @@ A typical loop:
 3. For each step: edit, then `verify_step` with the changed files. Fix and repeat until it passes.
 4. `complete_plan` saves the strategy as a recipe.
 
-To hand off, give the next agent the `plan_id`; it calls `get_plan`. [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) is a fuller prompt for MCP clients. [docs/LLM_CONTRACT.md](docs/LLM_CONTRACT.md) is the JSON contract.
+To hand off, `add_note` what you did and what is left, and give the next agent the `plan_id`; it calls `get_plan` and reads the notes. [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) is a fuller prompt for MCP clients. [docs/LLM_CONTRACT.md](docs/LLM_CONTRACT.md) is the JSON contract.
 
 ## Use it from the command line
 
@@ -152,7 +152,7 @@ Since those runs, `tools/list` carries full input schemas, so its payload is lar
 
 ## Coming from the Python version
 
-Trammel 3.15.3 was the last Python release; it is on the `python-legacy` branch, and its release notes are in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md). The commands, the 12 primary tool names, the nine beam names, the 15 languages, `.trammel.json`, `trammel.plan` exports, and the 10 minute claim are unchanged. `trammel migrate` imports an old store. [MIGRATION.md](MIGRATION.md) lists every difference, each marked as an intentional change, a bug fixed from Python, or not supported.
+Trammel 3.15.3 was the last Python release; it is on the `python-legacy` branch, and its release notes are in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md). The commands, the 12 primary tool names of 3.x (4.x adds `add_note`), the nine beam names, the 15 languages, `.trammel.json`, `trammel.plan` exports, and the 10 minute claim are unchanged. `trammel migrate` imports an old store. [MIGRATION.md](MIGRATION.md) lists every difference, each marked as an intentional change, a bug fixed from Python, or not supported.
 
 ## Development
 

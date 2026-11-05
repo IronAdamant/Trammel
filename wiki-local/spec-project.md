@@ -31,7 +31,7 @@ Document keys: `schema_version`, `plans`, `steps`, `constraints`, `recipes`, `fa
 
 ## 4. Tools
 
-32 tools. The default MCP listing is the 12 primary tools. `TRAMMEL_MCP_SURFACE=all` lists the rest. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
+33 tools. The default MCP listing is the 13 primary tools. `TRAMMEL_MCP_SURFACE=all` lists the rest. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
 
 Primary: `start_plan`, `decompose`, `get_plan`, `complete_plan`, `verify_step`, `get_recipe`, `save_recipe`, `status`, `resume`, `export_plan`, `get_constraints`, `add_constraint`.
 

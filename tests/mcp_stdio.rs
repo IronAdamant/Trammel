@@ -100,7 +100,7 @@ fn an_agent_can_fill_arguments_from_tools_list_and_act_on_errors() {
         call(8, "claim_step", r#"{"plan_id":1,"step_id":1,"agent_id":"agent-b"}"#),
     ], &dir);
     let tools = match at(&replies[0], &["result", "tools"]) { trammel::json::Value::Array(items) => items.clone(), _ => panic!() };
-    assert_eq!(tools.len(), 32);
+    assert_eq!(tools.len(), 33);
     for tool in &tools {
         let name = trammel::canon::stable(at(tool, &["name"]));
         let description = trammel::canon::as_str(at(tool, &["description"])).unwrap();
