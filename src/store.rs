@@ -226,8 +226,18 @@ impl Store {
         (rows.len(), missing_total, dead.len())
     }
 
+    /// Plan summaries, newest first: id, goal, status, current_step,
+    /// total_steps, created, updated. get_plan has the rest.
     pub fn list_plans(&self, status: Option<&str>) -> Vec<Value> {
-        self.rows("plans").into_iter().filter(|row| status.map(|s| canon::get(row, "status").and_then(canon::as_str) == Some(s)).unwrap_or(true)).cloned().collect()
+        let mut out: Vec<Value> = self.rows("plans").into_iter().filter(|row| status.map(|s| canon::get(row, "status").and_then(canon::as_str) == Some(s)).unwrap_or(true)).map(|row| {
+            let mut summary = row.clone();
+            if let Value::Object(fields) = &mut summary {
+                fields.retain(|(k, _)| matches!(k.as_str(), "id" | "goal" | "status" | "current_step" | "total_steps" | "created" | "updated"));
+            }
+            summary
+        }).collect();
+        out.reverse();
+        out
     }
 
     pub fn update_plan_status(&mut self, id: i64, status: &str) -> bool {
@@ -589,6 +599,22 @@ mod tests {
         for other in ["fix the login timeout in the auth module", "add a report of sales by region", "remove the threshold check from the store"] {
             assert!(store.best_recipe(other, 0.55).is_none(), "{other}");
         }
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_plans_is_a_newest_first_summary() {
+        let (dir, mut store) = temp_store("list");
+        let first = store.create_plan("first", &canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[])]))]));
+        let second = store.create_plan("second", &canon::obj(vec![("steps", Value::Array(vec![step("b.py", &[])]))]));
+        let listed = store.list_plans(None);
+        let ids: Vec<i64> = listed.iter().filter_map(|p| canon::get(p, "id").and_then(canon::as_i64)).collect();
+        assert_eq!(ids, vec![second, first]);
+        let Value::Object(fields) = &listed[0] else { panic!() };
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+        for key in ["id", "goal", "status", "current_step", "total_steps", "created", "updated"] { assert!(keys.contains(&key), "{key}"); }
+        assert!(!keys.contains(&"strategy") && !keys.contains(&"scaffold"));
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }

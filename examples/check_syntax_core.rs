@@ -7,8 +7,8 @@
 //! and stops at the first file that differs.
 //!
 //! Run from the repo root: `cargo run --example check_syntax_core [-- --against DIR]`.
-//! Same checks, messages, and exit codes as the `scripts/check_syntax_core.py`
-//! it replaces.
+//! Same checks and exit codes as the `scripts/check_syntax_core.py` it
+//! replaced. The ok line counts manifest entries (Python counted blank lines).
 
 #[path = "support/py.rs"]
 mod py;
@@ -18,14 +18,13 @@ use std::process::ExitCode;
 
 const MANIFEST: &str = "scripts/syntax_core_manifest.txt";
 
-/// Each non-blank manifest line as `(digest, path)`. A line with one word is
-/// the ValueError the Python unpacking raised.
+/// Each non-blank manifest line as `(digest, path)`.
 fn entries(lines: &[String]) -> Result<Vec<(String, String)>, ExitCode> {
     let mut out = Vec::new();
-    for line in lines {
+    for (n, line) in lines.iter().enumerate() {
         if py::strip(line).is_empty() { continue; }
         let Some((digest, path)) = py::split_once_ws(line) else {
-            eprintln!("ValueError: not enough values to unpack (expected 2, got 1)");
+            eprintln!("{MANIFEST} line {}: expected \"<sha256>  <path>\"", n + 1);
             return Err(ExitCode::from(1));
         };
         out.push((digest.to_string(), path.to_string()));
@@ -70,13 +69,14 @@ fn run(root: &Path, args: &[String]) -> ExitCode {
         println!("{}", bad.join("\n"));
         return ExitCode::from(1);
     }
-    // Python counted every manifest line here, blank ones included.
-    println!("syntax core manifest ok ({} files)", lines.len());
+    println!("syntax core manifest ok ({} files)", entries.len());
     if args.len() == 2 && args[0] == "--against" {
         let other = Path::new(&args[1]);
         for (_, path) in &entries {
-            let theirs_path = format!("{}{}{}", py::path_str(&args[1]), std::path::MAIN_SEPARATOR, path);
-            let Ok(theirs) = std::fs::read(other.join(path)) else { return py::not_found(&py::path_str(&theirs_path)) };
+            let Ok(theirs) = std::fs::read(other.join(path)) else {
+                eprintln!("{} has no {path}; pass the root of a stele-context checkout", py::path_str(&args[1]));
+                return ExitCode::from(1);
+            };
             let ours = std::fs::read(root.join(path)).unwrap_or_default();
             if theirs != ours {
                 println!("differs from stele: {path}");
@@ -112,8 +112,10 @@ mod tests {
     fn crlf_checkouts_match_the_lf_digest() {
         let dir = tree("ok");
         let lines = py::splitlines(&std::fs::read_to_string(dir.join(MANIFEST)).unwrap());
-        assert_eq!(lines.len(), 2, "the blank line counts toward the ok message");
-        assert!(problems(&dir, &entries(&lines).unwrap()).is_empty());
+        assert_eq!(lines.len(), 2);
+        let found = entries(&lines).unwrap();
+        assert_eq!(found.len(), 1, "blank lines are not entries");
+        assert!(problems(&dir, &found).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

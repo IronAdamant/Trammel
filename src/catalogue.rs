@@ -59,7 +59,7 @@ const TOOLS: &[Tool] = &[
         params: &[PLAN_ID], extra: &[] },
     Tool { name: "add_note", description: "Leave a free-text note on a plan for whoever picks it up next: what you did, what is left, what to watch out for. get_plan and resume return the notes.",
         params: &[PLAN_ID, ("text", "string", true, "The note, a few sentences."), ("agent_id", "string", false, "Who wrote it."), ("step_id", "integer", false, "The step `id` it is about.")], extra: &[] },
-    Tool { name: "list_plans", description: "List saved plans, newest last, optionally by status.",
+    Tool { name: "list_plans", description: "List saved plans newest first (id, goal, status, step counts, times), optionally by status.",
         params: &[("status", "pending|running|completed|failed", false, "Only plans with this status.")], extra: &[] },
     Tool { name: "update_plan_status", description: "Set a plan's status, e.g. failed when abandoning it.",
         params: &[PLAN_ID, ("status", "pending|running|completed|failed", true, "New status.")], extra: &[] },

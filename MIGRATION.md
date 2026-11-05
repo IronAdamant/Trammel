@@ -174,7 +174,7 @@ Arguments below are the ones Python advertises and Rust does not honour, or the 
 | `get_plan` | Intentional change | The plan object plus its `steps` and `notes`. The 3.x `scaffold` column (always the text `[]`) is left out. `strategy` is parsed from the stored JSON string when that parse succeeds. The reply leaves out `strategy.steps`, which repeated every step without status or claims and was about half the reply (15,923 to 8,533 bytes on a 15-step plan). Step `depends_on` is an array of step indexes, not JSON text. The stored plan, `export_plan`, and the recipe saved by `complete_plan` still have the full strategy. |
 | `resume` | Not supported | Same payload as `get_plan`, trimmed the same way. Python `get_plan_progress` returns `prior_edits`, remaining steps, and the next index. Measured keys on a migrated plan: `created`, `current_step`, `goal`, `id`, `scaffold`, `status`, `steps`, `strategy`, `total_steps`, `updated`. |
 | `history` | Intentional change | `{"plan_id": N, "trajectories": [...]}` from the store: rows migrated from 3.x, and one row per beam written by the goal command (`trammel GOAL`): `beam_id`, `variant`, `steps_completed`, `success`, `failure_reason` (the first line of the test error). Python stored the whole outcome object. |
-| `list_plans` | Intentional change | `db_path` is rejected. Measured: `code` `unknown_argument`, message `list_plans no longer accepts db_path`, hint `Set --store or TRAMMEL_DB_PATH`. |
+| `list_plans` | Intentional change | Newest first, seven fields per plan (`id`, `goal`, `status`, `current_step`, `total_steps`, `created`, `updated`), as in 3.x; it used to return every stored column, including the whole strategy as JSON text. `db_path` is rejected. Measured: `code` `unknown_argument`, message `list_plans no longer accepts db_path`, hint `Set --store or TRAMMEL_DB_PATH`. |
 | `update_plan_status` | Intentional change | Sets `status` and `updated`. Unknown id is `plan_not_found`. |
 | `complete_plan` | Not supported | Sets the plan to `completed` or `failed` and saves a recipe. It does not mark pending steps, and it ignores `step_status`. Measured: after `complete_plan` with `outcome` true, the plan status was `completed` and the step status was still `pending`. Python defaults `step_status` to `passed`. |
 | `export_plan` | Not supported | `format` `trammel.plan`, `format_version` 1, goal, status, plan id, steps, strategy. `dependency_graph` is `{}`, `scaffold` is null, and `constraints` is `[]` (`src/export.rs`). Step objects keep index, description, rationale, `depends_on`, status, and file. Python also copies symbols, edits, verification, and id when those fields exist. |
@@ -194,6 +194,23 @@ Arguments below are the ones Python advertises and Rust does not honour, or the 
 | `claim_step` / `release_step` | Intentional change | Claim sets `claimed_by`, `claimed_at`, and status `running`. A live claim by someone else is `claim_held`. Release by another agent is `claim_mismatch`. A `step_id` that is not a step `id` (often a `step_index`) is `step_not_found`, with a hint saying so. Python `claim_step` can also return a proximity warning when another plan touches the same file. That warning is not built here. |
 | `available_steps` | Intentional change | Returns pending or running steps for the plan that are not held by another agent inside 600 seconds and whose `depends_on` steps are all `passed`, `skipped`, `completed` or `done`. Python `get_available_steps` also required dependencies, and it only returned `pending` steps. |
 | `merge_plans` | Not supported | `interleave` alternates steps. Any other `strategy` value, including `priority` and `unified`, appends the second plan's steps. The new plan's goal is the two goals joined with ` + `. The result is `plan_id` and `strategy`. There is no conflict report and no cycle check. |
+
+## Repo checks
+
+`scripts/*.py` became std-only Rust examples (`cargo run --example check_zero_deps`, `check_no_todos`, `check_syntax_core`, `bench_gate`). Checks, pass/fail decisions, results and exit codes match the scripts, compared side by side on 23 passing and planted-failure trees. Error text that was Python's own is now a Rust message that says what to do:
+
+| Case | Python script | Rust example |
+| --- | --- | --- |
+| Missing `Cargo.lock`, `Cargo.toml` or manifest | `FileNotFoundError: [Errno 2] ...` traceback | `<path> not found; run the check from the repo root` |
+| Manifest line without a path | `ValueError: not enough values to unpack` traceback | `scripts/syntax_core_manifest.txt line N: expected "<sha256>  <path>"` |
+| `--against` checkout missing a file | `FileNotFoundError` traceback | `<dir> has no <path>; pass the root of a stele-context checkout` |
+| ok line count | Counted every manifest line, blank ones included | Counts entries |
+| `bench_gate` with no argument | `IndexError: list index out of range`, exit 1 | A usage line, exit 2 |
+| Timed binary exits with another code | `['<path>', '--version'] exited 3` | `<path> --version exited with status 3; it must exit 0 (or 2 for usage)` |
+| `--self-test` fails | `subprocess.CalledProcessError: Command '[...]' returned non-zero exit status 101.` | `` `cargo test ...` failed with exit status 101; the benchstat tests above say which `` |
+| `--self-test` without cargo | `FileNotFoundError: [WinError 2] ...` | `cargo not found on PATH; install Rust or fix PATH` |
+
+Also from 3.x wording: `strict_greenfield` rejections no longer mention a scaffold or recipe (4.x has no scaffold argument). The message is `the goal asks to create files but names no file path, and strict_greenfield is set`; the hint says to name the files in the goal or set `strict_greenfield` to false.
 
 ## Checked on 2026-11-04
 

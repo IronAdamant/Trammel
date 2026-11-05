@@ -1,7 +1,7 @@
 //! Fail if Cargo.lock names any package other than trammel, or if
 //! `[dependencies]` in Cargo.toml is not empty. Run from the repo root:
-//! `cargo run --example check_zero_deps`. Same checks, messages, and exit
-//! codes as the `scripts/check_zero_deps.py` it replaces.
+//! `cargo run --example check_zero_deps`. Same checks, results and exit
+//! codes as the `scripts/check_zero_deps.py` it replaced.
 
 #[path = "support/py.rs"]
 mod py;

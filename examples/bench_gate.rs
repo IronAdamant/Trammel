@@ -6,8 +6,8 @@
 //!   cargo run --release --example bench_gate -- target/release/trammel
 //!   cargo run --release --example bench_gate -- --self-test
 //!
-//! Same checks, messages, report file, and exit codes as the
-//! `scripts/bench_gate.py` it replaces.
+//! Same checks, report file, and pass/fail exit codes as the
+//! `scripts/bench_gate.py` it replaced; usage errors exit 2.
 
 #[path = "support/py.rs"]
 mod py;
@@ -35,7 +35,7 @@ fn time_ms(argv: &[String]) -> Result<Vec<f64>, String> {
         samples.push(t0.elapsed().as_secs_f64() * 1000.0);
         let code = out.status.code().unwrap_or(-1);
         if code != 0 && code != 2 {
-            return Err(format!("{} exited {code}", py::repr_list(argv)));
+            return Err(format!("{} exited with status {code}; it must exit 0 (or 2 for usage)", argv.join(" ")));
         }
     }
     Ok(samples)
@@ -152,13 +152,10 @@ fn self_test() -> ExitCode {
             println!("A/A passes and injected slowdown fails");
             ExitCode::SUCCESS
         }
-        // check_call could not start cargo at all.
-        Err(_) if cfg!(windows) => exit_with("FileNotFoundError: [WinError 2] The system cannot find the file specified"),
-        Err(_) => exit_with("FileNotFoundError: [Errno 2] No such file or directory: 'cargo'"),
+        Err(_) => exit_with("cargo not found on PATH; install Rust or fix PATH"),
         other => {
             let code = other.ok().and_then(|s| s.code()).unwrap_or(1);
-            let cmd = py::repr_list(&SELF_TEST.map(String::from));
-            exit_with(&format!("subprocess.CalledProcessError: Command '{cmd}' returned non-zero exit status {code}."))
+            exit_with(&format!("`{}` failed with exit status {code}; the benchstat tests above say which", SELF_TEST.join(" ")))
         }
     }
 }
@@ -168,7 +165,10 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == "--self-test") {
         return self_test();
     }
-    let Some(arg) = args.first() else { return exit_with("IndexError: list index out of range") };
+    let Some(arg) = args.first() else {
+        eprintln!("usage: cargo run --release --example bench_gate -- <path to trammel binary> | --self-test");
+        return ExitCode::from(2);
+    };
     let binary = match resolve_binary(arg) { Ok(b) => b, Err(message) => return exit_with(&message) };
     let argv = |extra: &str| vec![binary.clone(), extra.to_string()];
     let mut rows = Vec::new();

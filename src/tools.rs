@@ -229,13 +229,13 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
     request.focus_keywords = string_list(args, "focus_keywords");
     request.focus_globs = string_list(args, "focus_globs");
     if name == "explore" {
-        return planner::explore(&request).map_err(|e| Failure::new("decompose_rejected", e, "Relax strict_greenfield or pass a scaffold"));
+        return planner::explore(&request).map_err(|e| Failure::new("decompose_rejected", e, "Name the files to create in the goal (for example src/report.py), or set strict_greenfield to false"));
     }
     let persist = name == "start_plan" && crate::canon::get(args, "persist").and_then(crate::canon::as_bool).unwrap_or(true);
     // A saved plan always keeps its steps; summary_only only trims the reply.
     let summary_only = request.summary_only;
     if persist { request.summary_only = false; }
-    let full = planner::decompose(&request).map_err(|e| Failure::new("decompose_rejected", e, "Relax strict_greenfield or pass a scaffold"))?;
+    let full = planner::decompose(&request).map_err(|e| Failure::new("decompose_rejected", e, "Name the files to create in the goal (for example src/report.py), or set strict_greenfield to false"))?;
     let strategy = if persist && summary_only { planner::summary(&full) } else { full.clone() };
     if name == "decompose" { return Ok(strategy); }
     if !persist {
@@ -453,6 +453,19 @@ mod tests {
         call("complete_plan", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("plan_id", id)]), &dir, Some(&store), false).unwrap();
         let recipe = call("get_recipe", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("goal", Value::string("add stock to Item"))]), &dir, Some(&store), false).unwrap();
         assert_eq!(crate::canon::get(&recipe, "strategy").and_then(|s| crate::canon::get(s, "steps")).and_then(crate::canon::as_array).map(|s| s.len()), Some(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strict_greenfield_says_what_to_do() {
+        let dir = std::env::temp_dir().join(format!("trammel-greenfield-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let args = crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("goal", Value::string("create a dashboard")), ("strict_greenfield", Value::Bool(true))]);
+        let err = call("decompose", &args, &dir, Some(&dir.join(".trammel")), false).unwrap_err();
+        assert_eq!(err.code, "decompose_rejected");
+        assert!(!err.message.contains("scaffold") && !err.hint.contains("scaffold"), "{} / {}", err.message, err.hint);
+        assert!(err.hint.contains("strict_greenfield to false"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

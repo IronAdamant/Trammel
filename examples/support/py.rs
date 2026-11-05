@@ -1,7 +1,7 @@
-//! The few Python behaviours the repo checks depend on, so their Rust ports
-//! print the same bytes and exit with the same codes as the scripts they
-//! replace (python-legacy `scripts/*.py`). Each example includes this file
-//! with `#[path]`.
+//! Text and path helpers the repo checks share: Python-compatible line
+//! splitting and number formatting, so results and the bench report keep the
+//! format of the scripts they replaced (python-legacy `scripts/*.py`). Each
+//! example includes this file with `#[path]`.
 
 #![allow(dead_code)]
 
@@ -9,8 +9,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 /// `Path.read_text(encoding="utf-8")`: universal newlines, so `\r\n` and a
-/// lone `\r` both read as `\n`. A missing file ends the check the way the
-/// uncaught Python exception did: its last traceback line on stderr, exit 1.
+/// lone `\r` both read as `\n`. A missing file ends the check with exit 1.
 pub fn read_text(path: &str) -> Result<String, ExitCode> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).replace("\r\n", "\n").replace('\r', "\n")),
@@ -19,7 +18,7 @@ pub fn read_text(path: &str) -> Result<String, ExitCode> {
 }
 
 pub fn not_found(path: &str) -> ExitCode {
-    eprintln!("FileNotFoundError: [Errno 2] No such file or directory: {}", repr(path));
+    eprintln!("{path} not found; run the check from the repo root");
     ExitCode::from(1)
 }
 
@@ -77,31 +76,6 @@ pub fn split_once_ws(line: &str) -> Option<(&str, &str)> {
     Some((&line[..end], rest))
 }
 
-/// `repr(str)`.
-pub fn repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
-    let mut out = String::new();
-    out.push(quote);
-    for ch in text.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => { out.push('\\'); out.push(c); }
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\x{:02x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
-}
-
-/// `repr(list_of_str)`.
-pub fn repr_list(items: &[String]) -> String {
-    format!("[{}]", items.iter().map(|s| repr(s)).collect::<Vec<_>>().join(", "))
-}
-
 /// `repr(float)` for finite values: shortest round-trip digits, and a
 /// trailing `.0` on whole numbers.
 pub fn float(value: f64) -> String {
@@ -140,9 +114,6 @@ mod tests {
         assert_eq!(strip("\t x \x1f\n"), "x");
         assert_eq!(split_once_ws("abc  src/x.rs "), Some(("abc", "src/x.rs ")));
         assert_eq!(split_once_ws("onlyone"), None);
-        assert_eq!(repr("C:\\x\\t.exe"), "'C:\\\\x\\\\t.exe'");
-        assert_eq!(repr("it's"), "\"it's\"");
-        assert_eq!(repr_list(&["a".into(), "--version".into()]), "['a', '--version']");
         let sep = std::path::MAIN_SEPARATOR;
         assert_eq!(path_str("stele/./src//json.rs/"), format!("stele{sep}src{sep}json.rs"));
         assert_eq!(path_str(""), ".");

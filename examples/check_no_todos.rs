@@ -1,7 +1,7 @@
 //! Fail on leftover TODO or FIXME markers in the Rust tree under `src/`.
 //! Run from the repo root: `cargo run --example check_no_todos`. Same
-//! checks, messages, and exit codes as the `scripts/check_no_todos.py` it
-//! replaces, and the same file order as Python 3.13 `Path.rglob`.
+//! checks, results and exit codes as the `scripts/check_no_todos.py` it
+//! replaced. Files are listed directory by directory, breadth first.
 
 #[path = "support/py.rs"]
 mod py;

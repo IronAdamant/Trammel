@@ -69,7 +69,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         _ => request.root.clone(),
     };
     if request.strict_greenfield && goal::has_creation_intent(&request.goal) && goal::extract_paths_from_goal(&request.goal).is_empty() {
-        return Err("strict_greenfield requires explicit file paths in the goal, a non-empty scaffold, or a matching recipe with scaffold steps; otherwise set strict_greenfield=false".into());
+        return Err("the goal asks to create files but names no file path, and strict_greenfield is set".into());
     }
     let mut max_files = request.max_files.or(cfg.max_files);
     let expand = request.expand_repo.unwrap_or(true);
