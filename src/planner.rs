@@ -108,7 +108,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     let mut truncated = false;
     if let Some(limit) = max_files {
         if limit >= 0 && order.len() > limit as usize {
-            order.truncate(limit as usize);
+            order = keep_most_relevant(order, limit as usize, &symbols, &relevant, &keywords);
             truncated = true;
             let allowed: BTreeSet<String> = order.iter().cloned().collect();
             symbols.retain(|k, _| allowed.contains(k));
@@ -187,6 +187,26 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     }
     let _ = analysis_root;
     Ok(result)
+}
+
+/// Cut `order` to `limit` files. With goal keywords, keep the files with the
+/// highest step relevance (ties by position) and leave the rest in dependency
+/// order. Files without symbols produce no step, so they go last. Without
+/// keywords, keep the first `limit`, as Python's `core.py` did.
+fn keep_most_relevant(order: Vec<String>, limit: usize, symbols: &BTreeMap<String, Vec<String>>, graph: &BTreeMap<String, Vec<String>>, keywords: &BTreeSet<String>) -> Vec<String> {
+    if keywords.is_empty() {
+        return order.into_iter().take(limit).collect();
+    }
+    let (indeg, max_in) = score::dep_indegree(graph);
+    let mut ranked: Vec<(f64, usize)> = order.iter().enumerate().map(|(i, file)| {
+        let names = symbols.get(file).map(|v| v.as_slice()).unwrap_or(&[]);
+        let rank = if names.is_empty() { -1.0 } else { score::relevance_components(file, names, keywords, &indeg, max_in).2 };
+        (rank, i)
+    }).collect();
+    ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
+    let mut keep: Vec<usize> = ranked.into_iter().take(limit).map(|(_, i)| i).collect();
+    keep.sort_unstable();
+    keep.into_iter().map(|i| order[i].clone()).collect()
 }
 
 pub fn explore(request: &Request) -> Result<Value, String> {
@@ -339,4 +359,30 @@ pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: O
 
 fn graph_value_from_strategy(strategy: &Value) -> Value {
     canon::get(strategy, "dependency_graph").cloned().unwrap_or(Value::Object(vec![]))
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    #[test]
+    fn the_file_cap_keeps_the_files_the_goal_is_about() {
+        let dir = std::env::temp_dir().join(format!("trammel-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.join(format!("a_{i:02}.py")), format!("def helper_{i}():\n    return {i}\n")).unwrap();
+        }
+        std::fs::write(dir.join("zz_billing.py"), "def charge_invoice(total):\n    return total\n").unwrap();
+        let request = Request::new("fix invoice charging in billing", dir.clone());
+        let result = decompose(&request).unwrap();
+        let files: Vec<String> = canon::get(&result, "steps").and_then(canon::as_array).unwrap().iter().filter_map(|s| canon::get(s, "file").and_then(canon::as_str).map(String::from)).collect();
+        assert_eq!(files.len(), 15);
+        assert!(files.contains(&"zz_billing.py".to_string()), "{files:?}");
+        assert_eq!(canon::get(&result, "analysis_meta").and_then(|m| canon::get(m, "max_files_truncated")).and_then(canon::as_bool), Some(true));
+        // Without keywords the cap keeps the first files in dependency order.
+        let plain = keep_most_relevant((0..20).map(|i| format!("f{i:02}")).collect::<Vec<String>>(), 3, &BTreeMap::new(), &BTreeMap::new(), &BTreeSet::new());
+        assert_eq!(plain, vec!["f00", "f01", "f02"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

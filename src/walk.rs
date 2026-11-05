@@ -1,4 +1,5 @@
-//! Project walk. Ignored directory names match Python `utils._IGNORED_DIRS`.
+//! Project walk. Ignored directory names match Python `utils._IGNORED_DIRS`,
+//! plus `.claude`, where Claude Code keeps whole-repo agent worktrees.
 //! Relative paths always use `/`, including on Windows.
 
 use std::fs;
@@ -25,6 +26,7 @@ const IGNORED: &[&str] = &[
     ".parcel-cache",
     "sample_file_test",
     "target",
+    ".claude",
 ];
 
 pub fn is_ignored_dir(name: &str) -> bool {
@@ -112,4 +114,21 @@ pub fn collect_files(root: &Path, extensions: &[&str]) -> Vec<String> {
         .into_iter()
         .map(|file| file.rel)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_worktrees_under_dot_claude_are_not_project_files() {
+        let dir = std::env::temp_dir().join(format!("trammel-walk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".claude/worktrees/agent-1/pkg")).unwrap();
+        fs::create_dir_all(dir.join("pkg")).unwrap();
+        fs::write(dir.join("pkg/app.py"), "x = 1\n").unwrap();
+        fs::write(dir.join(".claude/worktrees/agent-1/pkg/app.py"), "x = 1\n").unwrap();
+        assert_eq!(collect_files(&dir, &[".py"]), vec!["pkg/app.py".to_string()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
