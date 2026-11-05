@@ -5,6 +5,7 @@ use crate::canon::{self, canonical};
 use crate::hash::sha256_hex;
 use crate::json::{self, Value};
 use crate::similarity::goal_similarity;
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -264,11 +265,16 @@ impl Store {
         Ok(())
     }
 
+    /// Steps an agent can work on now: pending or running, not held by another
+    /// agent's live claim, and every step in `depends_on` (step indexes) done.
     pub fn available(&self, plan_id: i64, agent: &str) -> Vec<Value> {
         let now = now_secs();
-        self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).filter(|row| {
+        let steps: Vec<&Value> = self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).collect();
+        let done: BTreeSet<i64> = steps.iter().filter(|row| is_done(canon::get(row, "status").and_then(canon::as_str).unwrap_or(""))).filter_map(|row| canon::get(row, "step_index").and_then(canon::as_i64)).collect();
+        steps.into_iter().filter(|row| {
             let status = canon::get(row, "status").and_then(canon::as_str).unwrap_or("pending");
             if status != "pending" && status != "running" { return false; }
+            if !step_deps(row).iter().all(|dep| done.contains(dep)) { return false; }
             match (canon::get(row, "claimed_by").and_then(canon::as_str), canon::get(row, "claimed_at").and_then(canon::as_f64)) {
                 (Some(owner), Some(at)) if owner != agent && now - at < 600.0 => false,
                 _ => true,
@@ -373,6 +379,22 @@ fn apply_journal(path: &Path, doc: &mut Value) {
     }
 }
 
+/// Step statuses that satisfy a dependency.
+pub fn is_done(status: &str) -> bool {
+    matches!(status, "passed" | "skipped" | "completed" | "done")
+}
+
+/// A step's `depends_on` step indexes. Stored as JSON text; older rows may
+/// hold a plain array.
+pub fn step_deps(step: &Value) -> Vec<i64> {
+    let parsed = match canon::get(step, "depends_on") {
+        Some(Value::String(text)) => json::parse(text).ok(),
+        Some(other) => Some(other.clone()),
+        None => None,
+    };
+    parsed.as_ref().and_then(canon::as_array).map(|items| items.iter().filter_map(canon::as_i64).collect()).unwrap_or_default()
+}
+
 pub fn append_journal(dir: &Path, doc: &Value) -> Result<(), String> {
     let mut file = OpenOptions::new().create(true).append(true).open(dir.join("journal")).map_err(|e| e.to_string())?;
     writeln!(file, "{}", canonical(doc)).map_err(|e| e.to_string())?;
@@ -399,4 +421,44 @@ pub fn journal_len(dir: &Path) -> u64 {
     let mut file = match File::open(dir.join("journal")) { Ok(f) => f, Err(_) => return 0 };
     let _ = file.seek(SeekFrom::End(0));
     file.stream_position().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub fn temp_store(tag: &str) -> (PathBuf, Store) {
+        let dir = std::env::temp_dir().join(format!("trammel-store-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir).unwrap();
+        (dir, store)
+    }
+
+    fn step(file: &str, deps: &[i64]) -> Value {
+        canon::obj(vec![("file", Value::string(file)), ("depends_on", Value::Array(deps.iter().map(|d| Value::Int(*d)).collect()))])
+    }
+
+    fn files(rows: &[Value]) -> Vec<String> {
+        rows.iter().filter_map(|r| canon::get(r, "file").and_then(canon::as_str).map(String::from)).collect()
+    }
+
+    #[test]
+    fn available_steps_wait_for_their_dependencies() {
+        let (dir, mut store) = temp_store("deps");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[]), step("b.py", &[0]), step("c.py", &[0, 1]), step("d.py", &[])]))]);
+        let plan = store.create_plan("goal", &strategy);
+        assert_eq!(files(&store.available(plan, "x")), vec!["a.py", "d.py"]);
+        let a = canon::get(&store.available(plan, "x")[0], "id").and_then(canon::as_i64).unwrap();
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(a)), ("status", Value::string("passed"))])]);
+        assert_eq!(files(&store.available(plan, "x")), vec!["b.py", "d.py"]);
+        // A failed dependency does not unblock its dependents.
+        let b = a + 1;
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(b)), ("status", Value::string("failed"))])]);
+        assert_eq!(files(&store.available(plan, "x")), vec!["d.py"]);
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(b)), ("status", Value::string("skipped"))])]);
+        assert_eq!(files(&store.available(plan, "x")), vec!["c.py", "d.py"]);
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
