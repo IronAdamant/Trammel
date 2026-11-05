@@ -50,7 +50,7 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    const LOCK: &str = "version = 4\n\n[[package]]\nname = \"trammel\"\nversion = \"4.0.1\"\n";
+    const LOCK: &str = "version = 4\n\n[[package]]\nname = \"trammel\"\nversion = \"0.0.0\"\n";
     const TOML: &str = "[package]\nname = \"trammel\"\n\n[dependencies]\n\n[[bin]]\nname = \"trammel\"\n";
 
     #[test]

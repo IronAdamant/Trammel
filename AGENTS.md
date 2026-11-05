@@ -1,6 +1,6 @@
 # Trammel agent guide
 
-Trammel 4.0.1 is one std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch. Do not tag or publish from a task branch.
+Trammel 4.x is one std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch. Do not tag or publish from a task branch.
 
 ## Commands
 
@@ -15,7 +15,7 @@ cargo run --example check_syntax_core
 
 Those checks are std-only Rust in `examples/`, run from the repo root. No Python is needed to build, test, or check the repo. The migrate tests read `tests/fixtures/trammel-3.15.3.db`, written once by python-legacy's `RecipeStore`.
 
-`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.1",...}`.
+`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"<Cargo.toml version>",...}`. The version lives only in the manifests (Cargo.toml, Cargo.lock, `npm/*/package.json`, server.json); tests read `CARGO_PKG_VERSION` and fail if a manifest disagrees.
 
 ## Module map
 

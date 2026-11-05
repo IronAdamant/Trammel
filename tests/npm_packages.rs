@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use trammel::canon;
 use trammel::json::{self, Value};
 
-const VERSION: &str = "4.0.1";
+/// Every manifest must carry the crate version, so a bump only edits manifests.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PLATFORMS: &[&str] = &[
     "trammel-linux-x64",
     "trammel-linux-arm64",
@@ -85,6 +86,12 @@ fn publish_is_public_and_registry_id_matches() {
         .unwrap();
     let npm = workflow.split("  npm:").nth(1).unwrap();
     assert!(!release.contains("actions/checkout"));
+    // A tag must match the manifests before anything is built or published.
+    let version = workflow.split("  version:").nth(1).unwrap().split("  build:").next().unwrap();
+    assert!(version.contains("Cargo.toml") && version.contains("npm/*/package.json") && version.contains("server.json"));
+    assert!(workflow.split("  build:").nth(1).unwrap().contains("needs: version"));
+    assert!(npm.contains("needs: [version, github-release]") && npm.contains("needs.version.result == 'success'"));
+    assert!(npm.contains("inputs.tag || github.ref"), "npm must publish the tagged commit's package.json files");
     for line in release.lines() {
         let stripped = line.trim();
         if stripped.starts_with('#') || !stripped.contains("gh ") {
@@ -130,6 +137,17 @@ fn publish_is_public_and_registry_id_matches() {
     let args = canon::get(&packages[0], "packageArguments").and_then(canon::as_array).unwrap();
     assert_eq!(str_field(&args[0], "type"), "positional");
     assert_eq!(str_field(&args[0], "value"), "mcp");
-    let cargo = fs::read_to_string(root().join("Cargo.toml")).unwrap();
-    assert!(cargo.contains("version = \"4.0.1\""));
+    let lock = fs::read_to_string(root().join("Cargo.lock")).unwrap();
+    assert!(lock.contains(&format!("name = \"trammel\"\nversion = \"{VERSION}\"")), "Cargo.lock is not at {VERSION}");
+}
+
+#[test]
+fn install_scripts_follow_the_latest_release() {
+    // A pinned default would need an edit on every release.
+    for script in ["install.sh", "install.ps1"] {
+        let text = fs::read_to_string(root().join(script)).unwrap();
+        assert!(text.contains("releases/latest/download"), "{script}");
+        assert!(text.contains("TRAMMEL_VERSION"), "{script} must still accept a pinned version");
+        assert!(!text.contains(VERSION), "{script} pins {VERSION}");
+    }
 }

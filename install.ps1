@@ -1,11 +1,13 @@
 # Download a published Trammel release into the user binary directory. No administrator.
 # This does not publish anything. A missing release prints the build command and exits.
 $ErrorActionPreference = "Stop"
-$version = if ($env:TRAMMEL_VERSION) { $env:TRAMMEL_VERSION } else { "4.0.1" }
+# TRAMMEL_VERSION=X.Y.Z pins a release; the default is the latest one.
+$base = if ($env:TRAMMEL_VERSION) { "https://github.com/IronAdamant/Trammel/releases/download/v$($env:TRAMMEL_VERSION)" } else { "https://github.com/IronAdamant/Trammel/releases/latest/download" }
+$label = if ($env:TRAMMEL_VERSION) { "v$($env:TRAMMEL_VERSION)" } else { "(latest)" }
 $arch = if ($env:PROCESSOR_ARCHITECTURE -match "ARM64") { "arm64" } else { "x64" }
 $asset = "trammel-windows-$arch"
-$url = "https://github.com/IronAdamant/Trammel/releases/download/v$version/$asset.tar.gz"
-$sums = "https://github.com/IronAdamant/Trammel/releases/download/v$version/SHA256SUMS"
+$url = "$base/$asset.tar.gz"
+$sums = "$base/SHA256SUMS"
 $dest = Join-Path $env:LOCALAPPDATA "trammel\bin"
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("trammel-" + [guid]::NewGuid().ToString("n"))
@@ -14,7 +16,7 @@ try {
     Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmp "$asset.tar.gz")
     Invoke-WebRequest -Uri $sums -OutFile (Join-Path $tmp "SHA256SUMS")
 } catch {
-    Write-Error "No GitHub Release v$version yet. Build with: cargo build --release"
+    Write-Error "No GitHub Release $label with $asset. Build with: cargo build --release"
     exit 1
 }
 $archive = Join-Path $tmp "$asset.tar.gz"

@@ -2,7 +2,10 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
 
-## Unreleased
+## 4.1.0 - 2026-11-05
+
+- Version 4.1.0 in every manifest. Tests read `CARGO_PKG_VERSION`, so a bump only edits Cargo.toml, Cargo.lock, `npm/*/package.json` and server.json. `install.sh` / `install.ps1` fetch the latest release unless `TRAMMEL_VERSION` pins one.
+- The release workflow refuses a tag that does not match those manifests, and a `workflow_dispatch` republish uses the tagged commit's npm package files.
 
 - MCP `tools/list` gives every tool a description and a real input schema. List results arrive as `{"items": [...]}` in `structuredContent`; the MCP TypeScript SDK rejected bare arrays.
 - `verify_plan` no longer crashes the server. `claim_step` / `release_step` with a step index say `step_not_found`; `record_steps` lists unknown ids in `not_found`. Missing-argument errors name the argument.

@@ -1,7 +1,7 @@
 # Trammel: project documentation index
 
 **Updated:** 2026-11-04
-**Version:** 4.0.1 (Rust binary and npm). The old Python version lives on the `python-legacy` branch.
+**Version:** 4.1.0 (Rust binary and npm; Cargo.toml is the source). The old Python version lives on the `python-legacy` branch.
 **Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 33 MCP tools, 13 primary. Store is `.trammel/`.
 
 ## Removed from main
@@ -42,14 +42,14 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `.github/workflows/rust.yml` | cargo test, zero deps, no markers, syntax core, bench rule |
 | `.gitignore` | Build output, store, local databases, editor files |
 | `AGENTS.md` | Module map, commands, release rules for agents |
-| `CHANGELOG.md` | 4.0.1 note, then 4.0.0, plus the Python 3.15.3 notes |
+| `CHANGELOG.md` | 4.x releases, newest first, plus the Python 3.15.3 notes |
 | `CLAUDE.md` | Source-tree guide for coding agents |
 | `Cargo.lock` | Locks the crate to itself. No other packages. |
-| `Cargo.toml` | Crate metadata, version 4.0.1, empty dependencies |
+| `Cargo.toml` | Crate metadata, the version, empty dependencies |
 | `GROK_CONNECTORS.md` | How a Grok client starts trammel mcp |
 | `LICENSE` | MIT licence |
 | `LLM_Development.md` | Chronological log, Python history included |
-| `MIGRATION.md` | Differences between Python 3.15.3 and Rust 4.0.1, for people moving stores and clients |
+| `MIGRATION.md` | Differences between Python 3.15.3 and Rust 4.x, for people moving stores and clients |
 | `README.md` | Install, benchmarks, the Python release notes, and a link to MIGRATION.md |
 | `SYSTEM_PROMPT.md` | MCP and CLI tool loop for LLM clients |
 | `bench/python_baseline.json` | Recorded Python medians used as CI floors |

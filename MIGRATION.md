@@ -1,6 +1,6 @@
 # Migrating from the Python version
 
-Trammel 3.15.3 is the last Python release. The package is `trammel` on PyPI (`pip install trammel`, and `pip install trammel[mcp]` for the stdio server). Version 4.0.1 is a std-only Rust binary. The commands are still `trammel` and `trammel-mcp`.
+Trammel 3.15.3 is the last Python release. The package is `trammel` on PyPI (`pip install trammel`, and `pip install trammel[mcp]` for the stdio server). Version 4.x is a std-only Rust binary. The commands are still `trammel` and `trammel-mcp`.
 
 The Python package, its unittest suite, `pyproject.toml`, and the PyPI workflow stay on the `python-legacy` branch. That branch is commit `dc7deb335e91e5a29541733a234dfc1ed24788a3`, the tip of `main` before pull request #7 removed the package. Nothing on `python-legacy` was rewritten for this note.
 
@@ -33,7 +33,7 @@ Each difference below has one mark:
 
 - **Intentional change.** A 4.x document or the rewrite pull request describes the new behaviour, or the Rust source states it as the replacement.
 - **Bug fixed from Python.** The 3.x result depended on something 4.x removed on purpose, and the parity notes call the new result the stable one.
-- **Not supported.** 4.0.1 does not do the 3.15.3 thing. Pull request #2 does not call the drop a planned cut. These rows are the ones to review. This pass did not change the code.
+- **Not supported.** 4.x does not do the 3.15.3 thing. Pull request #2 does not call the drop a planned cut. These rows are the ones to review. This pass did not change the code.
 
 ## What stays the same
 
@@ -53,9 +53,9 @@ Checked by reading both trees, and by running the checks in the last section whe
 
 ## Install and platforms
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
-| Package | Intentional change | PyPI `trammel`, Python `>=3.10`. Optional extra `mcp>=1.0.0,<3`. | npm `@iron_adamant/trammel` 4.0.1. No Python runtime. No PyPI publish from this tree (`CHANGELOG.md`). |
+| Package | Intentional change | PyPI `trammel`, Python `>=3.10`. Optional extra `mcp>=1.0.0,<3`. | npm `@iron_adamant/trammel` 4.x. No Python runtime. No PyPI publish from this tree (`CHANGELOG.md`). |
 | Server process | Intentional change | `trammel-mcp` imports the `mcp` package. Without it, the script prints an install hint and exits. | The MCP server is inside the binary. `trammel mcp` and `trammel-mcp` both serve stdio. |
 | Platforms | Intentional change | Classifiers say OS independent. The 3.15.3 changelog says CI is Ubuntu and macOS. Windows was left out of that matrix. | Release binaries: Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64. CI runs `cargo test` on Linux, macOS, and Windows. |
 | Library import | Not supported | `from trammel import Planner` and the other names in `trammel/__init__.py`. | No Python module and no Rust library API for those types. `register_strategy` is not exposed. |
@@ -63,11 +63,11 @@ Checked by reading both trees, and by running the checks in the last section whe
 
 ## Command line
 
-3.15.3 `trammel` only runs a goal (`trammel/cli.py`). 4.0.1 also runs `doctor`, `migrate`, `dump`, `mcp`, and every tool name as a subcommand (`src/cli.rs`).
+3.15.3 `trammel` only runs a goal (`trammel/cli.py`). 4.x also runs `doctor`, `migrate`, `dump`, `mcp`, and every tool name as a subcommand (`src/cli.rs`).
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
-| `--version` | Intentional change | argparse text: program name, space, package version. `pyproject.toml` says `3.15.3`. | One JSON object: `name`, `ok`, `schema_version` `4.0.0`, `version` `4.0.1`. `-V` is accepted. |
+| `--version` | Intentional change | argparse text: program name, space, package version. `pyproject.toml` says `3.15.3`. | One JSON object: `name`, `ok`, `schema_version` `4.0.0`, `version` (the crate version). `-V` is accepted. |
 | `--help` | Intentional change | argparse text. | JSON (`ok`, `schema_version`, `usage`, `tools`), pretty-printed. `-h` is accepted. |
 | Goal flags that stay | Intentional change | `--root`, `--beams`, `--test-cmd`, `--language`, `--scope`, `--dry-run`, `--export`. | Same flags. `--beams` is sent as `num_beams`. |
 | `--db` | Intentional change | Path of the SQLite file. Default `trammel.db` in the working directory. | Removed. Use `--store`, or `TRAMMEL_DB_PATH`, for the `.trammel` directory. |
@@ -87,7 +87,7 @@ Checked by reading both trees, and by running the checks in the last section whe
 
 `docs/LLM_CONTRACT.md` is the 4.x contract. `schema_version` there is the string `4.0.0`. The store file uses a different integer `schema_version` (1). They are not the same field.
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
 | Success shape | Intentional change | The handler object, indented, insertion order. CLI exit 0. | `{"ok":true,"schema_version":"4.0.0", ...}` with sorted keys, one line. CLI adds `result` or `tool` plus `result`. |
 | Failure shape | Intentional change | CLI: `Error: ...` on stderr, exit 1 or 2. MCP tool failure: text `Error: ...`, `isError` true (3.15.3). | CLI: the failure object on stderr, exit 1, or exit 2 when `code` is `usage`. `--human` prints `message` only. MCP: the same object in `structuredContent`, `isError` true. |
@@ -96,9 +96,9 @@ Checked by reading both trees, and by running the checks in the last section whe
 
 ## MCP
 
-A 4.x `initialize` for protocol `2025-06-18` returned `protocolVersion` `2025-06-18`, `serverInfo.name` `trammel`, `serverInfo.version` `4.0.1`. An unknown protocol version (`1999-01-01`) came back as `2025-11-25`. `2025-03-26` and `2024-11-05` are echoed back too; before, they got `2025-11-25` and older SDK clients (MCP TypeScript SDK 1.12, which asks for `2025-03-26`) disconnected. `server/discover` returned protocol `2026-07-28`. This pass did not start the Python `mcp` server, so it does not compare SDK handshake bytes. `trammel/mcp_stdio.py` does not implement `server/discover`.
+A 4.x `initialize` for protocol `2025-06-18` returned `protocolVersion` `2025-06-18`, `serverInfo.name` `trammel`, `serverInfo.version` the crate version. An unknown protocol version (`1999-01-01`) came back as `2025-11-25`. `2025-03-26` and `2024-11-05` are echoed back too; before, they got `2025-11-25` and older SDK clients (MCP TypeScript SDK 1.12, which asks for `2025-03-26`) disconnected. `server/discover` returned protocol `2026-07-28`. This pass did not start the Python `mcp` server, so it does not compare SDK handshake bytes. `trammel/mcp_stdio.py` does not implement `server/discover`.
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
 | Tool count | Intentional change | 33 tools in `TOOL_SCHEMAS`. | 33 names from `tools::all_names`: `verify_plan` and `add_note` are new, `record_step` and `create_plan` are gone. Primary surface is 13: the 3.x twelve plus `add_note`. |
 | Removed names | Intentional change | `create_plan` and `record_step` dispatch. | Both return `code` `tool_removed`. Measured: `create_plan` says `Call start_plan instead`. `record_step` says `Call record_steps instead`. Exit 1. |
@@ -165,7 +165,7 @@ This pass ran that comparison with `PYTHONPATH` pointed at `trammel/` from `pyth
 
 Arguments below are the ones Python advertises and Rust does not honour, or the result fields that changed. Tools not listed still accept the arguments `src/tools.rs` reads (goal, project root, scope, language, plan id, and so on).
 
-| Tool | Mark | 4.0.1 behaviour |
+| Tool | Mark | 4.x behaviour |
 | --- | --- | --- |
 | `start_plan` | Not supported | Decompose, then insert a plan. No duplicate-goal check (Python `create_plan` returned an existing id for the same goal and strategy JSON). `persist=false` returns `plan_id` null. With `summary_only`, the reply is the summary but the saved plan keeps every step; it used to save the summary, so the plan had no steps to hand off. A `strategy` string, when set, is stored as `strategy_name` on the saved copy. |
 | `decompose` | Not supported | Fresh analysis only. See Planning for the ignored arguments. Top-level keys on the archetype runs matched Python: `analysis_meta`, `constraints`, `constraints_applied`, `dependency_graph`, `expand_repo`, `goal`, `goal_fingerprint`, `plan_fidelity`, `steps`, `trammel_blind_spots`. |

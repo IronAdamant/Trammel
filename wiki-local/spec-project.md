@@ -1,6 +1,6 @@
 # Trammel technical specification
 
-**Version:** 4.0.1
+**Version:** 4.1.0
 **Language:** Rust, standard library only. No crates.
 
 The old Python version lives on the `python-legacy` branch.

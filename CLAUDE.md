@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Trammel 4.0.1 is one std-only Rust binary (`trammel`, `trammel-mcp`) plus the npm wrapper `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch.
+Trammel 4.x is one std-only Rust binary (`trammel`, `trammel-mcp`) plus the npm wrapper `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch.
 
 This file is the source-tree guide. Do not confuse it with a client `CLAUDE.md` that tells an assistant how to call the MCP server.
 
@@ -18,7 +18,7 @@ cargo run --release --example bench_gate -- target/release/trammel
 
 The repo checks are std-only Rust in `examples/` (the Python scripts they replace are on `python-legacy`). `cargo test` runs their unit tests. Run them from the repo root.
 
-`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.1",...}`.
+`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"<Cargo.toml version>",...}`. To release X.Y.Z, edit only the manifests: Cargo.toml, Cargo.lock, every `npm/*/package.json` (wrapper `optionalDependencies` too), and server.json. `tests/npm_packages.rs` checks they agree with `CARGO_PKG_VERSION`.
 
 `scripts/release.sh X.Y.Z` checks `Cargo.toml` and prints the tag command. It does not tag or publish.
 
@@ -50,7 +50,7 @@ The server advertises **33 tools**. Primary surface is 13 (`TRAMMEL_MCP_SURFACE=
 
 ## Release
 
-`.github/workflows/release.yml` runs on a `v*` tag. It builds six binaries, uploads them with `SHA256SUMS`, then publishes npm. `workflow_dispatch` with a `tag` input republishes an existing release. Do not push a tag from a task branch. Do not create `NPM_TOKEN` in the repo.
+`.github/workflows/release.yml` runs on a `v*` tag. Its first job fails unless the tag equals the Cargo.toml version and every `npm/*/package.json` and server.json version. It builds six binaries, uploads them with `SHA256SUMS`, then publishes npm. `workflow_dispatch` with a `tag` input republishes an existing release. Do not push a tag from a task branch. Do not create `NPM_TOKEN` in the repo.
 
 ## Benchmarks
 

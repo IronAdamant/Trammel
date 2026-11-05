@@ -29,7 +29,7 @@ fn handshake(bin: &str, args: &[&str]) {
     let tools = lines.next().unwrap().unwrap();
     assert!(init.contains("\"protocolVersion\":\"2025-06-18\""), "{init}");
     assert!(init.contains("\"name\":\"trammel\""), "{init}");
-    assert!(init.contains("\"version\":\"4.0.1\""), "{init}");
+    assert!(init.contains(&format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"))), "{init}");
     assert!(tools.contains("\"name\":\"start_plan\""), "{tools}");
     assert!(tools.contains("\"name\":\"decompose\""), "{tools}");
     let status = child.wait().unwrap();
