@@ -38,7 +38,9 @@ pub fn test_cmd(language: &str, root: &Path) -> Vec<String> {
     match language {
         "python" => {
             let start = if root.join("tests").is_dir() { "tests" } else { "." };
-            vec!["python3".into(), "-m".into(), "unittest".into(), "discover".into(), "-q".into(), "-s".into(), start.into(), "-p".into(), "test_*.py".into()]
+            let mut cmd = crate::harness::python_cmd();
+            cmd.extend(["-m", "unittest", "discover", "-q", "-s", start, "-p", "test_*.py"].map(String::from));
+            cmd
         }
         "go" => vec!["go".into(), "test".into(), "./...".into()],
         "rust" => vec!["cargo".into(), "test".into()],
@@ -55,7 +57,7 @@ pub fn test_cmd(language: &str, root: &Path) -> Vec<String> {
         "swift" => vec!["swift".into(), "test".into()],
         "dart" => vec!["dart".into(), "test".into()],
         "zig" => vec!["zig".into(), "build".into(), "test".into()],
-        _ => vec!["true".into()],
+        _ => crate::harness::no_op_cmd(),
     }
 }
 
