@@ -44,6 +44,21 @@ These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name 
 - **Test command.** `verify_step` uses its `test_cmd` argument, then `test_cmd` from `.trammel.json`, then the language default (`python -m unittest`, `cargo test`, `npm test`, `go test ./...`, ...). It stops after 60 seconds. Output is capped at 4 KB (head and tail) unless `full_output` is true.
 - **Large repos.** A plan keeps the 15 files most relevant to the goal. Pass `scope` (a subdirectory) or `focus_globs` to aim it, or `expand_repo: false` to lift the cap. `estimate` counts files first.
 
+## Tool groups
+
+The server may hide some groups (`TRAMMEL_TOOLS`, `TRAMMEL_DISABLE` in its `env`). A hidden tool answers with an error naming the variable that hid it; use the tools you are given rather than asking for hidden ones. `core` is always there.
+
+| Group | Tools | Overlaps with |
+|---|---|---|
+| `core` (always on) | `start_plan`, `decompose`, `get_plan`, `resume`, `complete_plan`, `status` | |
+| `plan` | `explore`, `list_plans`, `update_plan_status`, `merge_plans`, `export_plan`, `record_steps`, `history`, `estimate`, `list_strategies` | |
+| `verify` | `verify_step`, `verify_plan` | |
+| `recipes` | `save_recipe`, `get_recipe`, `list_recipes` | |
+| `constraints` | `add_constraint`, `get_constraints`, `deactivate_constraint`, `resolve_failure`, `failure_history` | |
+| `locks` | `claim_step`, `release_step`, `available_steps` | Chisel locks, CoordinationHub leases |
+| `notes` | `add_note` | wikifier journal notes |
+| `maintenance` | `prune_recipes`, `prune_plans`, `validate_recipes`, `usage_stats` | |
+
 ## Tool reference
 
 ### Primary tools (listed by default)

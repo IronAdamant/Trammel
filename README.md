@@ -56,6 +56,39 @@ Any client with a JSON config (Cursor, Claude Desktop, and others):
 
 The server speaks stdio (protocols `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`) and works on the project in its working directory; every tool also takes `project_root`. `tools/list` shows 13 primary tools with full input schemas. Set `TRAMMEL_MCP_SURFACE=all` in the server's environment to list all 33, including the multi-agent tools.
 
+### Tool groups
+
+Every tool is in one group, and two variables in the server's `env` switch groups (or single tools) off, so an agent running several suite tools keeps only the parts it uses. They shape the MCP listing only; the CLI is unchanged.
+
+| Group | Tools | Overlaps with |
+|---|---|---|
+| `core` (always on) | `start_plan`, `decompose`, `get_plan`, `resume`, `complete_plan`, `status` | |
+| `plan` | `explore`, `list_plans`, `update_plan_status`, `merge_plans`, `export_plan`, `record_steps`, `history`, `estimate`, `list_strategies` | |
+| `verify` | `verify_step`, `verify_plan` | |
+| `recipes` | `save_recipe`, `get_recipe`, `list_recipes` | |
+| `constraints` | `add_constraint`, `get_constraints`, `deactivate_constraint`, `resolve_failure`, `failure_history` | |
+| `locks` | `claim_step`, `release_step`, `available_steps` | Chisel locks, CoordinationHub leases |
+| `notes` | `add_note` | wikifier journal notes |
+| `maintenance` | `prune_recipes`, `prune_plans`, `validate_recipes`, `usage_stats` | |
+
+- `TRAMMEL_TOOLS`: comma-separated groups and/or tool names to expose (plus `core`); `all` means everything. When set, it replaces the `TRAMMEL_MCP_SURFACE` default listing.
+- `TRAMMEL_DISABLE`: comma-separated groups and/or tool names to hide, applied after `TRAMMEL_TOOLS`. `core` cannot be disabled.
+- Case and spaces are ignored. An unknown name (or `core` in `TRAMMEL_DISABLE`) stops the server at startup with one line on stderr and exit code 2, so the client shows it as failed. A call to a hidden tool returns an error that says which variable to change.
+
+```json
+{
+  "mcpServers": {
+    "trammel": {
+      "command": "npx",
+      "args": ["-y", "@iron_adamant/trammel", "mcp"],
+      "env": {"TRAMMEL_DISABLE": "locks,notes"}
+    }
+  }
+}
+```
+
+`tools/list` sizes: default 10,993 bytes; with `TRAMMEL_MCP_SURFACE=all` 23,894, minus `locks` 21,856, minus `notes` 23,132, minus both 21,094; `TRAMMEL_TOOLS=core` 6,044.
+
 A typical loop:
 
 1. `get_constraints` and `get_recipe` for anything learned earlier.

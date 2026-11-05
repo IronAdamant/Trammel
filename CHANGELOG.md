@@ -2,6 +2,10 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
 
+## 4.2.0 - 2026-11-05
+
+- Tool groups (the suite-wide convention): every MCP tool is in one group: `core` (always on), `plan`, `verify`, `recipes`, `constraints`, `locks` (`claim_step`, `release_step`, `available_steps`), `notes` (`add_note`), `maintenance`. `TRAMMEL_TOOLS` exposes only the named groups or tools (plus `core`); `TRAMMEL_DISABLE` hides groups or tools. Both combine with `TRAMMEL_MCP_SURFACE`. An unknown name, or `core` in `TRAMMEL_DISABLE`, stops the server with one stderr line and exit code 2. A call to a hidden tool returns `tool "claim_step" is disabled (group "locks") by TRAMMEL_DISABLE; remove "locks" from it to enable`. When a switch is set, `initialize` instructions and `status` (`tool_groups`) name the active groups. With neither set, the MCP output is byte-identical to 4.1.0. The CLI is unchanged.
+
 ## 4.1.0 - 2026-11-05
 
 - Version 4.1.0 in every manifest. Tests read `CARGO_PKG_VERSION`, so a bump only edits Cargo.toml, Cargo.lock, `npm/*/package.json` and server.json. `install.sh` / `install.ps1` fetch the latest release unless `TRAMMEL_VERSION` pins one.

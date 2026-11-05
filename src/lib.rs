@@ -9,6 +9,7 @@ pub mod contract;
 pub mod doctor;
 pub mod export;
 pub mod goal;
+pub mod groups;
 pub mod harness;
 pub mod hash;
 pub mod implicit;

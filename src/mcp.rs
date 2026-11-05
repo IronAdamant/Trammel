@@ -3,6 +3,7 @@
 
 use crate::canon::stable;
 use crate::contract::{self, Failure};
+use crate::groups::Switches;
 use crate::json::{self, Value};
 use crate::tools;
 use std::io::{self, BufRead, Write};
@@ -21,6 +22,15 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     let mut line = String::new();
     let surface = std::env::var("TRAMMEL_MCP_SURFACE").unwrap_or_else(|_| "primary".into());
     let telemetry = std::env::var("TRAMMEL_TELEMETRY").ok().as_deref() == Some("1");
+    // A typo in TRAMMEL_TOOLS / TRAMMEL_DISABLE stops the server, so the
+    // client shows it as failed instead of silently serving the wrong tools.
+    let switches = match Switches::from_env() {
+        Ok(switches) => switches,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
     loop {
         line.clear();
         let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
@@ -35,10 +45,10 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
         if id.is_none() { continue; }
         let params = crate::canon::get(&message, "params").cloned().unwrap_or(Value::Object(vec![]));
         match method {
-            "initialize" => reply(id, initialize(&params)),
-            "server/discover" => reply(id, discover(&surface)),
-            "tools/list" => reply(id, crate::canon::obj(vec![("tools", Value::Array(catalogue(&surface)))])),
-            "tools/call" => reply(id, tool_call(&params, store.as_deref(), telemetry)),
+            "initialize" => reply(id, initialize(&params, &switches)),
+            "server/discover" => reply(id, discover(&surface, &switches)),
+            "tools/list" => reply(id, crate::canon::obj(vec![("tools", Value::Array(catalogue(&surface, &switches)))])),
+            "tools/call" => reply(id, tool_call(&params, store.as_deref(), telemetry, &switches)),
             "ping" => reply(id, Value::Object(vec![])),
             _ => reply_err(id, -32601, "method not found"),
         }
@@ -46,23 +56,26 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-fn initialize(params: &Value) -> Value {
+fn initialize(params: &Value, switches: &Switches) -> Value {
     let requested = crate::canon::get(params, "protocolVersion").and_then(crate::canon::as_str).unwrap_or("2025-06-18");
     let version = if PROTOCOLS.contains(&requested) { requested } else { "2025-11-25" };
     crate::canon::obj(vec![
         ("protocolVersion", Value::string(version)),
         ("capabilities", crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(false))]))])),
         ("serverInfo", server_info()),
-        ("instructions", Value::string(INSTRUCTIONS)),
+        ("instructions", Value::string(match switches.summary() {
+            Some(groups) => format!("{INSTRUCTIONS} {groups}"),
+            None => INSTRUCTIONS.to_string(),
+        })),
     ])
 }
 
-fn discover(surface: &str) -> Value {
+fn discover(surface: &str, switches: &Switches) -> Value {
     crate::canon::obj(vec![
         ("protocolVersion", Value::string("2026-07-28")),
         ("serverInfo", server_info()),
         ("capabilities", crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(false))]))])),
-        ("tools", Value::Array(catalogue(surface))),
+        ("tools", Value::Array(catalogue(surface, switches))),
     ])
 }
 
@@ -70,8 +83,12 @@ fn server_info() -> Value {
     crate::canon::obj(vec![("name", Value::string("trammel")), ("version", Value::string(crate::VERSION))])
 }
 
-fn catalogue(surface: &str) -> Vec<Value> {
-    tools::all_names().into_iter().filter(|name| surface == "all" || surface == "full" || tools::PRIMARY.contains(name)).map(tool_schema).collect()
+fn catalogue(surface: &str, switches: &Switches) -> Vec<Value> {
+    tools::all_names()
+        .into_iter()
+        .filter(|name| switches.listed(name, surface == "all" || surface == "full" || tools::PRIMARY.contains(name)))
+        .map(tool_schema)
+        .collect()
 }
 
 fn tool_schema(name: &str) -> Value {
@@ -89,14 +106,33 @@ fn tool_schema(name: &str) -> Value {
     ])
 }
 
-fn tool_call(params: &Value, store: Option<&std::path::Path>, telemetry: bool) -> Value {
+fn tool_call(params: &Value, store: Option<&std::path::Path>, telemetry: bool, switches: &Switches) -> Value {
     let name = crate::canon::get(params, "name").and_then(crate::canon::as_str).unwrap_or("");
     let args = crate::canon::get(params, "arguments").cloned().unwrap_or(Value::Object(vec![]));
+    if let Err(line) = switches.check_call(name) {
+        return disabled(&line);
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| path_buf_from("."));
     match tools::call(name, &args, &cwd, store, telemetry) {
-        Ok(value) => content(value, false),
+        Ok(mut value) => {
+            if name == "status" {
+                if let Some(groups) = switches.summary() { crate::canon::insert(&mut value, "tool_groups", Value::string(groups)); }
+            }
+            content(value, false)
+        }
         Err(err) => content(err.value(), true),
     }
+}
+
+/// A switched-off tool: the text is the convention's one line; the
+/// structured failure carries the same line.
+fn disabled(line: &str) -> Value {
+    let failure = Failure::new("tool_disabled", line, "");
+    crate::canon::obj(vec![
+        ("content", Value::Array(vec![crate::canon::obj(vec![("type", Value::string("text")), ("text", Value::string(line))])])),
+        ("structuredContent", failure.value()),
+        ("isError", Value::Bool(true)),
+    ])
 }
 
 fn path_buf_from(path: &str) -> std::path::PathBuf { std::path::PathBuf::from(path) }

@@ -144,3 +144,96 @@ fn initialize_echoes_every_published_protocol_it_supports() {
     let unknown = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}"#.to_string();
     assert_eq!(trammel::canon::as_str(at(&session(&[unknown], &dir)[0], &["result", "protocolVersion"])), Some("2025-11-25"));
 }
+
+/// Run the server with exactly these switch variables (inherited ones removed).
+fn switched(envs: &[(&str, &str)], requests: &[String]) -> (Option<i32>, Vec<trammel::json::Value>, String) {
+    let mut cmd = Command::new(trammel_mcp_bin());
+    cmd.current_dir(std::env::temp_dir()).env_remove("TRAMMEL_TOOLS").env_remove("TRAMMEL_DISABLE").env_remove("TRAMMEL_MCP_SURFACE");
+    for (key, value) in envs { cmd.env(key, value); }
+    let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for request in requests { let _ = writeln!(stdin, "{request}"); }
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let replies = String::from_utf8_lossy(&out.stdout).lines().map(|l| trammel::json::parse(l).unwrap()).collect();
+    (out.status.code(), replies, String::from_utf8_lossy(&out.stderr).trim().to_string())
+}
+
+fn listed(envs: &[(&str, &str)]) -> Vec<String> {
+    let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.to_string();
+    let (_, replies, stderr) = switched(envs, &[list]);
+    assert!(!replies.is_empty(), "no reply; stderr: {stderr}");
+    let trammel::json::Value::Array(tools) = at(&replies[0], &["result", "tools"]).clone() else { panic!() };
+    tools.iter().map(|t| trammel::canon::as_str(at(t, &["name"])).unwrap().to_string()).collect()
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = list.iter().map(|s| s.to_string()).collect();
+    v.sort();
+    v
+}
+
+const CORE: &[&str] = &["complete_plan", "decompose", "get_plan", "resume", "start_plan", "status"];
+
+#[test]
+fn without_switches_the_listing_and_instructions_are_unchanged() {
+    assert_eq!(listed(&[]), names(trammel::tools::PRIMARY));
+    assert_eq!(listed(&[("TRAMMEL_MCP_SURFACE", "all")]).len(), 33);
+    // Empty values count as unset.
+    assert_eq!(listed(&[("TRAMMEL_TOOLS", ""), ("TRAMMEL_DISABLE", " ")]), names(trammel::tools::PRIMARY));
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}"#.to_string();
+    let (_, replies, _) = switched(&[], &[init.clone()]);
+    assert!(!trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().contains("Tool groups"));
+    let (_, replies, _) = switched(&[("TRAMMEL_DISABLE", "locks,notes")], &[init]);
+    assert!(trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().ends_with("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes."));
+}
+
+#[test]
+fn tools_and_disable_filter_by_group_and_by_tool() {
+    let mut want: Vec<&str> = CORE.to_vec();
+    want.extend(["available_steps", "claim_step", "release_step", "verify_step"]);
+    assert_eq!(listed(&[("TRAMMEL_TOOLS", "LOCKS, verify_step")]), names(&want));
+    assert_eq!(listed(&[("TRAMMEL_TOOLS", "all")]).len(), 33);
+    // TRAMMEL_TOOLS replaces the surface default, then TRAMMEL_DISABLE applies.
+    assert_eq!(listed(&[("TRAMMEL_TOOLS", "locks"), ("TRAMMEL_DISABLE", "release_step")]).len(), CORE.len() + 2);
+    let all_but = listed(&[("TRAMMEL_MCP_SURFACE", "all"), ("TRAMMEL_DISABLE", "locks,notes")]);
+    assert_eq!(all_but.len(), 29);
+    assert!(!all_but.iter().any(|n| ["claim_step", "release_step", "available_steps", "add_note"].contains(&n.as_str())));
+    let primary_but = listed(&[("TRAMMEL_DISABLE", "get_recipe, notes")]);
+    assert_eq!(primary_but.len(), trammel::tools::PRIMARY.len() - 2);
+}
+
+#[test]
+fn a_disabled_tool_says_how_to_enable_it() {
+    let call = |name: &str| format!(r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{{}}}}}}"#);
+    let (_, replies, _) = switched(&[("TRAMMEL_DISABLE", "locks")], &[call("claim_step")]);
+    assert_eq!(trammel::canon::as_bool(at(&replies[0], &["result", "isError"])), Some(true));
+    let trammel::json::Value::Array(content) = at(&replies[0], &["result", "content"]).clone() else { panic!() };
+    let line = trammel::canon::as_str(at(&content[0], &["text"])).unwrap().to_string();
+    assert_eq!(line, r#"tool "claim_step" is disabled (group "locks") by TRAMMEL_DISABLE; remove "locks" from it to enable"#);
+    assert_eq!(trammel::canon::as_str(at(&replies[0], &["result", "structuredContent", "code"])), Some("tool_disabled"));
+    let (_, replies, _) = switched(&[("TRAMMEL_TOOLS", "verify")], &[call("add_note")]);
+    let trammel::json::Value::Array(content) = at(&replies[0], &["result", "content"]).clone() else { panic!() };
+    assert_eq!(trammel::canon::as_str(at(&content[0], &["text"])), Some(r#"tool "add_note" is disabled (group "notes") by TRAMMEL_TOOLS; add "notes" to it to enable"#));
+    // status reports the active groups.
+    let (_, replies, _) = switched(&[("TRAMMEL_DISABLE", "notes")], &[call("status")]);
+    assert!(trammel::canon::as_str(at(&replies[0], &["result", "structuredContent", "tool_groups"])).unwrap().contains("off: notes"));
+}
+
+#[test]
+fn unknown_names_and_core_stop_the_server_with_exit_2() {
+    let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.to_string();
+    let (code, replies, stderr) = switched(&[("TRAMMEL_DISABLE", "lokcs")], &[list.clone()]);
+    assert_eq!(code, Some(2));
+    assert!(replies.is_empty());
+    assert!(stderr.starts_with(r#"TRAMMEL_DISABLE: unknown group "lokcs"; groups: core, plan, verify, recipes, constraints, locks, notes, maintenance; tools: "#), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1);
+    let (code, _, stderr) = switched(&[("TRAMMEL_TOOLS", "verify,nope")], &[list.clone()]);
+    assert_eq!(code, Some(2));
+    assert!(stderr.starts_with(r#"TRAMMEL_TOOLS: unknown group "nope""#), "{stderr}");
+    for core in ["core", "get_plan"] {
+        let (code, _, stderr) = switched(&[("TRAMMEL_DISABLE", core)], &[list.clone()]);
+        assert_eq!(code, Some(2), "{core}");
+        assert!(stderr.contains("always on"), "{stderr}");
+    }
+}
