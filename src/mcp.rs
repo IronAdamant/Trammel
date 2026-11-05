@@ -129,10 +129,11 @@ fn initialize(params: &Value, switches: &Switches) -> Value {
     ])
 }
 
-/// `tools.listChanged` is true once groups are in play (an env switch or an
-/// agent-tools block), because edits to the block change the list live.
-fn capabilities(switches: &Switches) -> Value {
-    crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(switches.active()))]))])
+/// `tools.listChanged` is always true: an agent can add or edit an
+/// agent-tools block at any time, and the client must honour the
+/// notification even if it connected before the block existed.
+fn capabilities(_switches: &Switches) -> Value {
+    crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(true))]))])
 }
 
 fn notify(method: &str) {

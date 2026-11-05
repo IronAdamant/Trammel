@@ -242,7 +242,9 @@ fn unknown_names_and_core_stop_the_server_with_exit_2() {
 
 /// `initialize` and `tools/list` with no group switches, byte for byte as
 /// Trammel 4.1.0 answered them (recorded from a 4.1.0 build; the server
-/// version is masked). Run for the primary and the full surface.
+/// version is masked). The one deliberate difference: since 4.2.0
+/// `capabilities.tools.listChanged` is true, because AGENTS.md can change
+/// the list mid-session. Run for the primary and the full surface.
 #[test]
 fn default_output_is_byte_identical_to_the_last_release() {
     let requests = [
