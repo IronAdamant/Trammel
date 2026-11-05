@@ -1,6 +1,18 @@
 # Changelog
 
-The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in `README.md` (Full Changelog) and `LLM_Development.md`.
+The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
+
+## Unreleased
+
+- MCP `tools/list` gives every tool a description and a real input schema. List results arrive as `{"items": [...]}` in `structuredContent`; the MCP TypeScript SDK rejected bare arrays.
+- `verify_plan` no longer crashes the server. `claim_step` / `release_step` with a step index say `step_not_found`; `record_steps` lists unknown ids in `not_found`. Missing-argument errors name the argument.
+- `verify_step` runs on Windows: real Python before the Store alias, `.cmd` shims, no stall on large test logs, no shared temp dir between concurrent runs.
+- The 15-file cap keeps the files most relevant to the goal. `.claude` is ignored. Steps no longer depend on themselves.
+- `get_plan` and `resume` no longer repeat every step inside `strategy` (about half the bytes). `start_plan` with `summary_only` still saves every step.
+- `doctor` no longer prints `schema_version` twice.
+- The repo checks are std-only Rust (`cargo run --example ...`), replacing `scripts/*.py`.
+
+See MIGRATION.md for details.
 
 ## 4.0.1
 
