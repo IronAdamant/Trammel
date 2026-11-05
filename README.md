@@ -141,7 +141,7 @@ trammel "fix tests" --test-cmd pytest -x -q      # plan, then run the tests per 
 
 1. **Decompose.** Parse the project's imports and symbols, add edges inferred from naming and shared-state rules (`data/patterns.json`), sort files by dependency, and score each file's relevance to the goal. A whole-repo plan keeps the 15 most relevant files unless `expand_repo` is false.
 2. **Explore.** Nine orderings (bottom-up, top-down, risk-first, and others) of the same steps, for when the default order is not the one you want.
-3. **Verify.** Copy the project to a temporary directory, apply the edits, check syntax, run the test command, and report pass or fail with capped output.
+3. **Verify.** Copy the project (in a git repo, the files git would commit; ignored build output and data stay behind) to a temporary directory, apply the edits, check syntax, run the test command, and report pass or fail with capped output.
 4. **Constrain.** Store rules and failures so later agents see them.
 5. **Remember.** Save a successful strategy; `get_recipe` matches later goals by a text blend (trigram cosine, word Jaccard, substring).
 
