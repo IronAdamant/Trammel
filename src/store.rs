@@ -135,8 +135,10 @@ impl Store {
         true
     }
 
-    pub fn record_steps(&mut self, steps: &[Value]) -> usize {
+    /// Returns how many steps changed and the ids that matched no step.
+    pub fn record_steps(&mut self, steps: &[Value]) -> (usize, Vec<i64>) {
         let mut n = 0;
+        let mut unknown = Vec::new();
         for incoming in steps {
             let Some(id) = canon::get(incoming, "step_id").and_then(canon::as_i64).or_else(|| canon::get(incoming, "id").and_then(canon::as_i64)) else { continue };
             let status = canon::get(incoming, "status").and_then(canon::as_str).unwrap_or("passed");
@@ -144,10 +146,12 @@ impl Store {
             if let Some(row) = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(id)) {
                 canon::insert(row, "status", Value::string(status));
                 n += 1;
+            } else {
+                unknown.push(id);
             }
         }
         if n > 0 { self.dirty = true; }
-        n
+        (n, unknown)
     }
 
     pub fn add_constraint(&mut self, kind: &str, description: &str, context: &Value, plan_id: Option<i64>, step_id: Option<i64>) -> i64 {

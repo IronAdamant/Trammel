@@ -2,6 +2,7 @@
 
 pub mod benchstat;
 pub mod canon;
+pub mod catalogue;
 pub mod cli;
 pub mod config;
 pub mod contract;

@@ -13,10 +13,10 @@ The command's fields sit next to those two. Keys are sorted. Output is one compa
 Failure:
 
 ```json
-{"ok":false,"schema_version":"4.0.0","code":"plan_not_found","message":"plan 3 was not found","hint":"Check list_plans","retryable":false}
+{"ok":false,"schema_version":"4.0.0","code":"plan_not_found","message":"plan 3 was not found","hint":"Call list_plans for valid plan ids","retryable":false}
 ```
 
-Exit codes: `0` success, `1` failure, `2` usage. MCP puts the same object in `structuredContent` and sets `isError` to true on failure.
+Exit codes: `0` success, `1` failure, `2` usage. MCP puts the same object in `structuredContent` and sets `isError` to true on failure. A tool whose result is a list sends `{"items": [...]}` over MCP, because `structuredContent` must be an object.
 
 `schema_version` is `4.0.0`. The Rust MCP surface is 32 tools: `verify_plan` is included, and `record_step` / `create_plan` are not. Breaking changes wait for 5.0. `trammel.plan` exports keep `format_version` 1. The npm package is `@iron_adamant/trammel` 4.0.1 (`npm i -g @iron_adamant/trammel`, `npx -y @iron_adamant/trammel mcp`). The installed commands stay `trammel` and `trammel-mcp`. The registry name is `io.github.IronAdamant/trammel` (`server.json`).
 
@@ -26,4 +26,4 @@ Removed names `record_step` and `create_plan` return `code` `tool_removed` and n
 
 `verify_step` caps `trace` at 4 KB (head and tail) and sets `truncated` when it cuts. Pass `full_output` true for the whole trace.
 
-Per-tool schema files live in `schemas/`.
+Argument schemas are served by `tools/list` (`src/catalogue.rs`). The result envelope files live in `schemas/`.

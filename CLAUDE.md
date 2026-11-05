@@ -26,7 +26,7 @@ python scripts/bench_gate.py target/release/trammel
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs` decompose a goal and run the nine beams. Implicit-edge rules are `data/patterns.json`, embedded with `include_str!`.
 - `src/lang/` detects language, extracts symbols, and resolves imports. Python uses the stele-context parser under `src/syntax/`, `src/lang/python/`, and `src/lang/python_symbols/`. `scripts/syntax_core_manifest.txt` is their digest. Other languages use `src/lang/code.rs`, `src/lang/symbols.rs`, and `src/lang/imports.rs`.
 - `src/store.rs` is the `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
-- `schemas/` has one JSON schema per tool. A new tool needs a schema file and a row in `src/tools.rs`.
+- `schemas/` has one result schema per tool. A new tool needs a schema file, a row in `src/tools.rs`, and an entry in `src/catalogue.rs` (description and input schema for `tools/list`).
 - `tests/archetypes/` and `parity/fixtures/` are sample projects for the Rust tests. They are not a Python package.
 - `tests/goldens/test_farm_decompose.json` is the decompose golden. `bench/` holds recorded timings.
 - `npm/` is the wrapper and the six platform packages. The release workflow copies binaries in at publish time.

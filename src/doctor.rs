@@ -23,7 +23,6 @@ pub fn report(start: &Path, store: Option<&Path>) -> Value {
     }
     crate::contract::ok(vec![
         ("version", Value::string(crate::VERSION)),
-        ("schema_version", Value::string(crate::SCHEMA_VERSION)),
         ("project_root", Value::string(root.display().to_string())),
         ("store", Value::string(dir.display().to_string())),
         ("store_present", Value::Bool(dir.join("store").is_file())),
@@ -34,4 +33,19 @@ pub fn report(start: &Path, store: Option<&Path>) -> Value {
         ("telemetry", Value::Bool(config::telemetry_enabled(&cfg))),
         ("next_steps", Value::Array(next.into_iter().map(Value::String).collect())),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn report_has_no_duplicate_keys() {
+        let report = super::report(&std::env::temp_dir(), None);
+        let crate::json::Value::Object(fields) = report else { panic!("doctor must return an object") };
+        let mut keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+        let total = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), total, "duplicate keys in doctor output");
+        assert!(keys.contains(&"schema_version"));
+    }
 }

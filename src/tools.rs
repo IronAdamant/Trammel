@@ -49,7 +49,8 @@ pub fn call(name: &str, args: &Value, cwd: &Path, store_override: Option<&Path>,
             return Err(err);
         }
     }
-    let needs_store = !matches!(name, "decompose" | "explore" | "estimate" | "list_strategies" | "verify_step" | "verify_plan");
+    // verify_plan reads the plan, so it needs the store.
+    let needs_store = !matches!(name, "decompose" | "explore" | "estimate" | "list_strategies" | "verify_step");
     let mut store = if needs_store { Some(Store::open(&store_path).map_err(|e| Failure::new("store", e, "Check that the store directory is writable"))?) } else { None };
     if telemetry {
         if let Some(store) = store.as_mut() { store.log_usage(name, ""); }
@@ -64,8 +65,8 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
         "decompose" | "explore" | "start_plan" => plan_tool(name, args, root, store),
         "get_plan" | "resume" | "history" => {
             let id = required_i64(args, "plan_id")?;
-            let store = store.ok_or_else(|| Failure::new("store", "store is not open", ""))?;
-            let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Check list_plans"))?;
+            let store = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?;
+            let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
             if name == "history" { Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(vec![]))])) } else { Ok(plan) }
         }
         "list_plans" => {
@@ -78,14 +79,19 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
         "update_plan_status" => {
             let id = required_i64(args, "plan_id")?;
             let status = required_str(args, "status")?;
-            if !store.unwrap().update_plan_status(id, &status) { return Err(Failure::new("plan_not_found", format!("plan {id} was not found"), "")); }
+            if !store.unwrap().update_plan_status(id, &status) { return Err(Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids")); }
             Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("status", Value::string(status))]))
         }
         "complete_plan" => complete(args, store.unwrap()),
         "record_steps" => {
-            let steps = crate::canon::get(args, "steps").and_then(crate::canon::as_array).ok_or_else(|| Failure::new("missing_argument", "steps is required", ""))?;
-            let n = store.unwrap().record_steps(steps);
-            Ok(crate::canon::obj(vec![("updated", Value::Int(n as i64))]))
+            let steps = crate::canon::get(args, "steps").and_then(crate::canon::as_array).ok_or_else(|| missing("steps", "an array of {step_id, status}"))?;
+            let (n, unknown) = store.unwrap().record_steps(steps);
+            let mut out = crate::canon::obj(vec![("updated", Value::Int(n as i64))]);
+            if !unknown.is_empty() {
+                crate::canon::insert(&mut out, "not_found", Value::Array(unknown.into_iter().map(Value::Int).collect()));
+                crate::canon::insert(&mut out, "hint", Value::string("step_id is the step `id` from get_plan, not step_index"));
+            }
+            Ok(out)
         }
         "add_constraint" => {
             let kind = required_str(args, "constraint_type")?;
@@ -97,7 +103,7 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
         "get_constraints" => Ok(Value::Array(store.unwrap().constraints(crate::canon::get(args, "constraint_type").and_then(crate::canon::as_str)))),
         "deactivate_constraint" => {
             let id = required_i64(args, "constraint_id")?;
-            if !store.unwrap().deactivate_constraint(id) { return Err(Failure::new("not_found", format!("constraint {id} was not found"), "")); }
+            if !store.unwrap().deactivate_constraint(id) { return Err(Failure::new("not_found", format!("constraint {id} was not found"), "Call get_constraints for active constraint ids")); }
             Ok(crate::canon::obj(vec![("constraint_id", Value::Int(id)), ("active", Value::Bool(false))]))
         }
         "save_recipe" => {
@@ -157,13 +163,13 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             let plan = required_i64(args, "plan_id")?;
             let step = required_i64(args, "step_id")?;
             let agent = required_str(args, "agent_id")?;
-            store.unwrap().claim(plan, step, &agent).map_err(|e| Failure::new("claim_held", e, "Wait for the 10 minute expiry or release it"))?;
+            store.unwrap().claim(plan, step, &agent).map_err(|e| step_failure(e, "claim_held", "Pick another step from available_steps, or wait for the 10 minute expiry"))?;
             Ok(crate::canon::obj(vec![("claimed", Value::Bool(true)), ("step_id", Value::Int(step))]))
         }
         "release_step" => {
             let step = required_i64(args, "step_id")?;
             let agent = required_str(args, "agent_id")?;
-            store.unwrap().release(step, &agent).map_err(|e| Failure::new("claim_mismatch", e, "Pass the agent_id that holds the claim"))?;
+            store.unwrap().release(step, &agent).map_err(|e| step_failure(e, "claim_mismatch", "Pass the agent_id that holds the claim"))?;
             Ok(crate::canon::obj(vec![("released", Value::Bool(true))]))
         }
         "available_steps" => {
@@ -175,7 +181,7 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
         "verify_step" => Ok(verify_step(args, root)),
         "verify_plan" => verify_plan(args, root, store.unwrap()),
         "export_plan" => export_plan(args, store.unwrap()),
-        other => Err(Failure::new("unknown_tool", format!("unknown tool {other}"), "")),
+        other => Err(Failure::new("unknown_tool", format!("unknown tool {other}"), "Call tools/list")),
     }
 }
 
@@ -207,7 +213,7 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
     let forced = crate::canon::get(args, "strategy").and_then(crate::canon::as_str).map(|s| s.to_string());
     let mut stored = strategy.clone();
     if let Some(name) = forced { crate::canon::insert(&mut stored, "strategy_name", Value::string(name)); }
-    let id = store.ok_or_else(|| Failure::new("store", "store is not open", ""))?.create_plan(&goal, &stored);
+    let id = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?.create_plan(&goal, &stored);
     Ok(crate::canon::obj(vec![
         ("strategy", strategy),
         ("plan_id", Value::Int(id)),
@@ -219,7 +225,7 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
 fn complete(args: &Value, store: &mut Store) -> Result<Value, Failure> {
     let id = required_i64(args, "plan_id")?;
     let outcome = crate::canon::get(args, "outcome").and_then(crate::canon::as_bool).unwrap_or(true);
-    let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), ""))?;
+    let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
     let goal = crate::canon::get(&plan, "goal").and_then(crate::canon::as_str).unwrap_or("").to_string();
     let strategy = crate::canon::get(&plan, "strategy").cloned().unwrap_or(Value::Object(vec![]));
     let sig = store.save_recipe(&goal, &strategy, outcome);
@@ -243,7 +249,7 @@ fn verify_step(args: &Value, fallback: &Path) -> Value {
 
 fn verify_plan(args: &Value, fallback: &Path, store: &mut Store) -> Result<Value, Failure> {
     let id = required_i64(args, "plan_id")?;
-    let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), ""))?;
+    let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
     let steps = crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).map(|items| items.to_vec()).unwrap_or_default();
     let mut completed = 0i64;
     for step in &steps {
@@ -264,7 +270,7 @@ fn verify_plan(args: &Value, fallback: &Path, store: &mut Store) -> Result<Value
 
 fn export_plan(args: &Value, store: &Store) -> Result<Value, Failure> {
     let id = required_i64(args, "plan_id")?;
-    let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), ""))?;
+    let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
     let doc = crate::export::from_plan(&plan);
     if let Some(path) = crate::canon::get(args, "path").and_then(crate::canon::as_str) {
         std::fs::write(path, crate::canon::stable_pretty(&doc)).map_err(|e| Failure::new("export", e.to_string(), "Check the path is writable"))?;
@@ -275,8 +281,8 @@ fn export_plan(args: &Value, store: &Store) -> Result<Value, Failure> {
 fn merge(args: &Value, store: &mut Store) -> Result<Value, Failure> {
     let a = required_i64(args, "plan_a_id")?;
     let b = required_i64(args, "plan_b_id")?;
-    let left = store.get_plan(a).ok_or_else(|| Failure::new("plan_not_found", format!("plan {a} was not found"), ""))?;
-    let right = store.get_plan(b).ok_or_else(|| Failure::new("plan_not_found", format!("plan {b} was not found"), ""))?;
+    let left = store.get_plan(a).ok_or_else(|| Failure::new("plan_not_found", format!("plan {a} was not found"), "Call list_plans for valid plan ids"))?;
+    let right = store.get_plan(b).ok_or_else(|| Failure::new("plan_not_found", format!("plan {b} was not found"), "Call list_plans for valid plan ids"))?;
     let strategy = crate::canon::get(args, "strategy").and_then(crate::canon::as_str).unwrap_or("sequential");
     let mut steps = crate::canon::get(&left, "steps").and_then(crate::canon::as_array).map(|items| items.to_vec()).unwrap_or_default();
     let mut more = crate::canon::get(&right, "steps").and_then(crate::canon::as_array).map(|items| items.to_vec()).unwrap_or_default();
@@ -326,11 +332,24 @@ fn string_list(args: &Value, key: &str) -> Vec<String> {
 }
 
 fn required_str(args: &Value, key: &str) -> Result<String, Failure> {
-    crate::canon::get(args, key).and_then(crate::canon::as_str).map(|s| s.to_string()).ok_or_else(|| Failure::new("missing_argument", format!("{key} is required"), ""))
+    crate::canon::get(args, key).and_then(crate::canon::as_str).map(|s| s.to_string()).ok_or_else(|| missing(key, "a string"))
 }
 
 fn required_i64(args: &Value, key: &str) -> Result<i64, Failure> {
-    crate::canon::get(args, key).and_then(crate::canon::as_i64).ok_or_else(|| Failure::new("missing_argument", format!("{key} is required"), "Pass an integer"))
+    crate::canon::get(args, key).and_then(crate::canon::as_i64).ok_or_else(|| missing(key, "an integer"))
+}
+
+fn missing(key: &str, kind: &str) -> Failure {
+    Failure::new("missing_argument", format!("{key} is required"), format!("Pass {key} as {kind}; tools/list has the full inputSchema"))
+}
+
+/// The store reports an unknown step as "step not found". Agents usually pass
+/// `step_index` there, so say which number is wanted.
+fn step_failure(message: String, code: &'static str, hint: &str) -> Failure {
+    if message == "step not found" {
+        return Failure::new("step_not_found", message, "step_id is the step `id` from get_plan or available_steps, not step_index");
+    }
+    Failure::new(code, message, hint)
 }
 
 fn arg_path(args: &Value, key: &str) -> Option<PathBuf> {

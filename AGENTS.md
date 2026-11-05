@@ -22,7 +22,7 @@ python scripts/check_syntax_core.py
 - `src/lang/symbols.rs`, `src/lang/imports.rs`: hand-written extractors.
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs`: decompose and the nine beams. Rules are `data/patterns.json`.
 - `src/store.rs`: `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
-- `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces.
+- `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces. `src/catalogue.rs`: tool descriptions and input schemas for `tools/list`.
 - `src/benchstat.rs`: the regression rule.
 
 ## Add a language
@@ -34,7 +34,7 @@ python scripts/check_syntax_core.py
 
 ## MCP
 
-The Rust server advertises **32 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 12. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. New tools need a `schemas/<name>.schema.json` file and a row in `src/tools.rs`.
+The Rust server advertises **32 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 12. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
 
 ## Tied implicit edges
 
