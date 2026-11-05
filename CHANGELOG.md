@@ -2,6 +2,11 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
 
+## 4.3.1 - 2026-11-05
+
+- `verify_step` copies only what git would commit: tracked files plus untracked files no .gitignore excludes (`git ls-files --cached --others --exclude-standard`). Outside a git work tree, or without git, it walks the tree as before, skipping generated directories. On Specula each verify copied 4,645 files (469.5 MB, including the ignored 184 MB `gallery-full/`); it now copies 1,626 files (36.0 MB). Median of six runs: copy-only verify 4.4 s to 1.7 s, `cargo test -p sepulcra --lib` verify 11.0 s to 7.6 s.
+- Suggested new files only when the goal asks for one: a creation verb with a file-like noun ("create a props module", "add a new settings page", "add a module called retry_policy") or a path in the goal that does not exist. At most three, in the folder of the most relevant step. Otherwise `creation_hints.suggested_files` is empty and `suggested_edits` lists the existing files to change. The Specula goal no longer suggests `blocks.rs`, `flag.rs`, `marked.rs` and the like.
+
 ## 4.3.0 - 2026-11-05
 
 From the live test on Specula, a 27-crate Rust workspace (goal: "add a per-prop blocks_build flag to Sepulcra props: ..."):

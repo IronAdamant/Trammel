@@ -177,6 +177,42 @@ pub fn has_refactor_intent(goal: &str) -> bool {
     ident_alpha(goal).iter().any(|w| REFACTOR.contains(&w.as_str()))
 }
 
+/// Nouns that, after a creation verb, mean "a new file".
+const FILE_NOUNS: &[&str] = &[
+    "file", "module", "class", "component", "page", "screen", "view", "endpoint", "route",
+    "script", "service", "handler", "controller", "plugin", "command", "crate", "package",
+    "binary", "example", "migration",
+];
+
+const ARTICLES: &[&str] = &["a", "an", "the", "new", "one", "another"];
+
+/// Names of the new files a goal clearly asks for: "create a props module"
+/// gives `props`, "add a new settings page" gives `settings`, "add a module
+/// called retry_policy" gives `retry_policy`. A goal that only changes
+/// existing code ("add a blocks_build flag to props") gives none.
+pub fn new_file_names(goal: &str) -> Vec<String> {
+    let lower = goal.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).filter(|w| !w.is_empty()).collect();
+    if !words.iter().any(|w| CREATION.contains(w) || *w == "new") { return Vec::new(); }
+    let mut names = Vec::new();
+    for (i, word) in words.iter().enumerate() {
+        if !FILE_NOUNS.contains(word) { continue; }
+        // "a module called X" / "a module named X"
+        if matches!(words.get(i + 1), Some(&"called") | Some(&"named")) {
+            if let Some(name) = words.get(i + 2) { names.push(name.replace('-', "_")); }
+            continue;
+        }
+        // "a props module", "a new settings page"
+        if let Some(prev) = i.checked_sub(1).and_then(|j| words.get(j)) {
+            if !ARTICLES.contains(prev) && !STOP.contains(prev) && !CREATION.contains(prev) && !FILE_NOUNS.contains(prev) {
+                names.push(prev.replace('-', "_"));
+            }
+        }
+    }
+    names.dedup();
+    names
+}
+
 pub fn has_creation_intent(goal: &str) -> bool {
     let lower = goal.to_lowercase();
     let split: BTreeSet<&str> = lower.split_whitespace().collect();

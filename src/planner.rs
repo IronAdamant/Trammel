@@ -180,7 +180,8 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         ("trammel_blind_spots", Value::Int(blind as i64)),
     ]);
     if !request.suppress_creation_hints {
-        if let Some(hints) = creation_hints(&request.goal, &keywords, &all, &language) {
+        let ranked = canon::get(&result, "steps").and_then(canon::as_array).map(|s| s.to_vec()).unwrap_or_default();
+        if let Some(hints) = creation_hints(&request.goal, &keywords, &all, &language, &ranked) {
             canon::insert(&mut result, "creation_hints", hints);
         }
     }
@@ -331,8 +332,17 @@ fn extension_for(siblings: &[String], language: &str) -> String {
     analyze::extensions(language).first().map(|e| e.trim_start_matches('.').to_string()).unwrap_or_else(|| "txt".into())
 }
 
-fn creation_hints(goal: &str, keywords: &BTreeSet<String>, files: &BTreeSet<String>, language: &str) -> Option<Value> {
+/// What a goal that adds something should touch. New files are suggested
+/// only when the goal clearly asks for one (`goal::new_file_names`, or a
+/// path in the goal that does not exist yet), in the directory of the most
+/// relevant step, at most three. Otherwise `suggested_files` is empty and
+/// `suggested_edits` names the existing files to change.
+fn creation_hints(goal: &str, keywords: &BTreeSet<String>, files: &BTreeSet<String>, language: &str, steps: &[Value]) -> Option<Value> {
     if !goal::has_creation_intent(goal) { return None; }
+    let mut by_relevance: Vec<(f64, String)> = steps.iter()
+        .filter_map(|s| Some((canon::get(s, "relevance").and_then(canon::as_f64).unwrap_or(0.0), canon::get(s, "file").and_then(canon::as_str)?.to_string())))
+        .collect();
+    by_relevance.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut dirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for file in files {
         if let Some((dir, base)) = file.rsplit_once('/') {
@@ -346,31 +356,43 @@ fn creation_hints(goal: &str, keywords: &BTreeSet<String>, files: &BTreeSet<Stri
         if words.intersection(&variants).next().is_some() { relevant.push(dir.clone()); }
     }
     let mut suggested = Vec::new();
-    for dir in &relevant {
-        let siblings = dirs.get(dir).cloned().unwrap_or_default();
-        let dir_words = dir.to_lowercase().split(|c: char| !c.is_ascii_lowercase()).filter(|w| !w.is_empty()).map(|s| s.to_string()).collect::<BTreeSet<_>>();
+    // Paths written in the goal that do not exist yet.
+    for path in goal::extract_paths_from_goal(goal) {
+        if !files.contains(&path) && !suggested.iter().any(|s: &Value| canon::get(s, "path").and_then(canon::as_str) == Some(path.as_str())) {
+            suggested.push(canon::obj(vec![("path", Value::string(path)), ("from", Value::string("goal"))]));
+        }
+    }
+    // Named new modules, pages, scripts... next to the code they belong with.
+    let names = goal::new_file_names(goal);
+    let home = by_relevance.first().and_then(|(_, f)| f.rsplit_once('/').map(|(d, _)| d.to_string()))
+        .or_else(|| relevant.first().cloned());
+    if let Some(dir) = home.filter(|_| !names.is_empty()) {
+        let siblings = dirs.get(&dir).cloned().unwrap_or_default();
         let ext = extension_for(&siblings, language);
-        for kw in keywords {
-            if dir_words.contains(kw) { continue; }
-            let name = format!("{kw}.{ext}");
-            let path = format!("{dir}/{name}");
+        for name in names {
+            let path = format!("{dir}/{name}.{ext}");
             if !files.contains(&path) {
                 suggested.push(canon::obj(vec![
                     ("path", Value::string(path)),
-                    ("keyword", Value::string(kw.clone())),
+                    ("name", Value::string(name)),
                     ("directory", Value::string(dir.clone())),
                     ("inferred_from", Value::Array(siblings.iter().take(3).cloned().map(Value::String).collect())),
                 ]));
             }
         }
     }
-    suggested.truncate(8);
-    Some(canon::obj(vec![
+    suggested.truncate(3);
+    let mut out = canon::obj(vec![
         ("creation_intent", Value::Bool(true)),
         ("goal_entities", Value::Array(keywords.iter().cloned().map(Value::String).collect())),
         ("relevant_directories", Value::Array(relevant.into_iter().map(Value::String).collect())),
-        ("suggested_files", Value::Array(suggested)),
-    ]))
+        ("suggested_files", Value::Array(suggested.clone())),
+    ]);
+    if suggested.is_empty() {
+        let edits: Vec<Value> = by_relevance.iter().take(3).map(|(_, f)| Value::string(f.clone())).collect();
+        canon::insert(&mut out, "suggested_edits", Value::Array(edits));
+    }
+    Some(out)
 }
 
 pub fn graph_map(value: &Value) -> BTreeMap<String, Vec<String>> {
@@ -565,6 +587,23 @@ mod anchor_tests {
         assert_eq!(goal_anchors(&dir, &words("speed up the pathfinder")), vec!["crates/eng"]);
         assert_eq!(goal_anchors(&dir, &words("fix Sepulcra props")), vec!["games/sepulcra"]);
         assert!(goal_anchors(&dir, &words("rename a helper")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_files_only_when_the_goal_asks_for_one() {
+        assert_eq!(goal::new_file_names("create a props module for the map"), vec!["props"]);
+        assert_eq!(goal::new_file_names("add a new settings page"), vec!["settings"]);
+        assert_eq!(goal::new_file_names("add a module called retry-policy"), vec!["retry_policy"]);
+        assert!(goal::new_file_names("add a per-prop blocks_build flag to Sepulcra props: others are decoration only").is_empty());
+        assert!(goal::new_file_names("update the props module").is_empty(), "no creation verb");
+        let dir = workspace("noise");
+        let request = Request::new("add a per-prop blocks_build flag to Sepulcra props: props marked blocks_build stop building on their tiles, others are decoration only", dir.clone());
+        let result = decompose(&request).unwrap();
+        let hints = canon::get(&result, "creation_hints").unwrap();
+        assert_eq!(canon::stable(canon::get(hints, "suggested_files").unwrap()), "[]");
+        let edits = canon::stable(canon::get(hints, "suggested_edits").unwrap());
+        assert!(edits.contains("games/sepulcra/"), "{edits}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
