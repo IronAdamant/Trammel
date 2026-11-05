@@ -64,7 +64,8 @@ fn initialize(params: &Value, switches: &Switches) -> Value {
         ("capabilities", crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(false))]))])),
         ("serverInfo", server_info()),
         ("instructions", Value::string(match switches.summary() {
-            Some(groups) => format!("{INSTRUCTIONS} {groups}"),
+            // One last line, only when a switch is set.
+            Some(groups) => format!("{INSTRUCTIONS}\n{groups}"),
             None => INSTRUCTIONS.to_string(),
         })),
     ])

@@ -185,7 +185,9 @@ fn without_switches_the_listing_and_instructions_are_unchanged() {
     let (_, replies, _) = switched(&[], &[init.clone()]);
     assert!(!trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().contains("Tool groups"));
     let (_, replies, _) = switched(&[("TRAMMEL_DISABLE", "locks,notes")], &[init]);
-    assert!(trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().ends_with("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes."));
+    let instructions = trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().to_string();
+    assert_eq!(instructions.lines().last(), Some("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes."));
+    assert_eq!(instructions.lines().count(), 2);
 }
 
 #[test]
@@ -235,5 +237,37 @@ fn unknown_names_and_core_stop_the_server_with_exit_2() {
         let (code, _, stderr) = switched(&[("TRAMMEL_DISABLE", core)], &[list.clone()]);
         assert_eq!(code, Some(2), "{core}");
         assert!(stderr.contains("always on"), "{stderr}");
+    }
+}
+
+/// `initialize` and `tools/list` with no group switches, byte for byte as
+/// Trammel 4.1.0 answered them (recorded from a 4.1.0 build; the server
+/// version is masked). Run for the primary and the full surface.
+#[test]
+fn default_output_is_byte_identical_to_the_last_release() {
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"golden","version":"0"}}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    ];
+    let current = format!("\"name\":\"trammel\",\"version\":\"{}\"", env!("CARGO_PKG_VERSION"));
+    for surface in ["primary", "all"] {
+        let mut child = Command::new(trammel_mcp_bin())
+            .current_dir(std::env::temp_dir())
+            .env_remove("TRAMMEL_TOOLS")
+            .env_remove("TRAMMEL_DISABLE")
+            .env("TRAMMEL_MCP_SURFACE", surface)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        for request in requests { writeln!(stdin, "{request}").unwrap(); }
+        drop(stdin);
+        let out = child.wait_with_output().unwrap();
+        let got = String::from_utf8(out.stdout).unwrap().replace(&current, "\"name\":\"trammel\",\"version\":\"<VERSION>\"");
+        let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/goldens/mcp_default_{surface}.jsonl"));
+        let want = std::fs::read_to_string(&golden_path).unwrap().replace("\r\n", "\n");
+        assert!(got == want, "{surface}: default MCP output differs from {}", golden_path.display());
     }
 }
