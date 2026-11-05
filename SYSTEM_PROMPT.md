@@ -38,7 +38,7 @@ These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name 
 ## Conventions
 
 - **Step ids.** A step has an `id` (unique in the store) and a `step_index` (its position in the plan). `claim_step`, `release_step`, `record_steps` and `add_note` take the `id`. `depends_on` lists step indexes.
-- **Results.** Every result is one JSON object. Lists come as `{"items": [...]}` over MCP.
+- **Results.** Every result is one JSON object. Lists come as `{"items": [...]}` over MCP. Plan and recipe replies are compact by default; pass `full: true` to `start_plan`, `decompose`, `get_plan`, `resume` or `get_recipe` when you need symbols, rationale or the import graph.
 - **Errors.** A failed call returns `isError: true` and `{"code", "message", "hint"}`. The hint says what to do next, for example which argument is missing or that a number was a `step_index` rather than an `id`.
 - **Project.** Tools work on the project in the server's working directory. Pass `project_root` to use another one.
 - **Test command.** `verify_step` uses its `test_cmd` argument, then `test_cmd` from `.trammel.json`, then the language default (`python -m unittest`, `cargo test`, `npm test`, `go test ./...`, ...). It stops after 60 seconds. Output is capped at 4 KB (head and tail) unless `full_output` is true.
@@ -93,14 +93,14 @@ Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). 
 | `add_constraint` | **constraint_type**, context, **description**, plan_id, step_id | Record a rule or known-bad approach (e.g. do not edit generated files) so every later agent sees it via get_constraints. |
 | `add_note` | agent_id, **plan_id**, step_id, **text** | Leave a free-text note on a plan for whoever picks it up next: what you did, what is left, what to watch out for. get_plan and resume return the notes. |
 | `complete_plan` | outcome, **plan_id** | Close a plan as completed (or failed) and save its strategy as a recipe for similar goals. Step statuses are left as they are. |
-| `decompose` | expand_repo, focus_globs, focus_keywords, **goal**, language, max_files, max_steps, num_beams, relevant_only, scope, strict_greenfield, summary_only, suppress_creation_hints | Plan a change without saving: files in dependency order, their symbols, goal relevance, and the import graph. Read-only. |
+| `decompose` | expand_repo, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, relevant_only, scope, strict_greenfield, summary_only, suppress_creation_hints | Plan a change without saving: files in dependency order with goal relevance. Read-only. full: true adds symbols and the import graph. |
 | `export_plan` | path, **plan_id** | Return a saved plan as a trammel.plan document, and write it to path when given. |
 | `get_constraints` | constraint_type | List active constraints. Read these before editing. |
-| `get_plan` | **plan_id** | Load a saved plan with its steps, step status, claims and handoff notes. Use it to pick up work another agent or session left. |
-| `get_recipe` | **goal** | Return the saved recipe whose goal best matches this one, paraphrases included (similarity at least 0.55), or {recipe: null}. |
-| `resume` | **plan_id** | Same as get_plan: load a saved plan to continue it. |
+| `get_plan` | full, **plan_id** | Load a saved plan with its steps, step status, claims and handoff notes. Use it to pick up work another agent or session left. |
+| `get_recipe` | full, **goal** | Return the saved recipe whose goal best matches this one, paraphrases included (similarity at least 0.55), or {recipe: null}. |
+| `resume` | full, **plan_id** | Same as get_plan: load a saved plan to continue it. |
 | `save_recipe` | **goal**, outcome, strategy | Save a strategy that worked so get_recipe can return it for similar goals. |
-| `start_plan` | expand_repo, focus_globs, focus_keywords, **goal**, language, max_files, max_steps, num_beams, persist, relevant_only, scope, strategy, strict_greenfield, summary_only, suppress_creation_hints | Plan a multi-file change and save it. Returns dependency-ordered file steps plus plan_id; later sessions and other agents continue it with get_plan. Same options as decompose. |
+| `start_plan` | expand_repo, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, persist, relevant_only, scope, strategy, strict_greenfield, summary_only, suppress_creation_hints | Plan a multi-file change and save it. Returns dependency-ordered file steps plus plan_id; later sessions and other agents continue it with get_plan. Same options as decompose. |
 | `status` | none | Store location and counts of plans, steps, recipes, constraints and failures. |
 | `verify_step` | edits, full_output, language, test_cmd | Apply edits to a temporary copy of the project, check bracket balance, and run the tests there. The real tree is never touched. Unbalanced brackets fail at once with line numbers; otherwise success is the test result. Output capped at 4 KB, 60 s limit. |
 

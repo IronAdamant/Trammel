@@ -92,6 +92,9 @@ fn publish_is_public_and_registry_id_matches() {
     assert!(workflow.split("  build:").nth(1).unwrap().contains("needs: version"));
     assert!(npm.contains("needs: [version, github-release]") && npm.contains("needs.version.result == 'success'"));
     assert!(npm.contains("inputs.tag || github.ref"), "npm must publish the tagged commit's package.json files");
+    // NPM_PUBLISH=false holds npm back on a tag push; a manual dispatch still publishes.
+    assert!(npm.contains("vars.NPM_PUBLISH != 'false'"));
+    assert!(npm.contains("github.event_name == 'workflow_dispatch' || (needs.github-release.result == 'success' && vars.NPM_PUBLISH != 'false')"));
     for line in release.lines() {
         let stripped = line.trim();
         if stripped.starts_with('#') || !stripped.contains("gh ") {

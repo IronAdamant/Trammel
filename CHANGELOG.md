@@ -2,6 +2,16 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
 
+## 4.3.0 - 2026-11-05
+
+From the live test on Specula, a 27-crate Rust workspace (goal: "add a per-prop blocks_build flag to Sepulcra props: ..."):
+
+- Plans follow the code the goal names. A directory whose name, or whose Cargo.toml / package.json package name, is a goal word is an anchor (`analysis_meta.anchors`). Files inside it get 30% of their relevance from being there, and import count drops to 10%, so shared helpers no longer outrank the named crate. The language is detected at the anchor. On Specula, 15 of 15 steps are now in `games/sepulcra` (was 3 of 15, led by `specula-core` `dmath.rs`, `hash.rs` and `rng.rs`).
+- Keywords: parts of identifiers such as `blocks_build` stay keywords even when they are verbs ("build"); more English filler words ("their", "others", "per", ...) are dropped; partial matches need a shared prefix of four letters or more ("per" no longer matches "upper").
+- Suggested new files use the extension of the files around them (`.rs` in a Rust crate), not always `.py` (B9).
+- `start_plan`, `decompose`, `get_plan`, `resume` and `get_recipe` reply compactly by default: steps with file, description, dependencies and relevance; plan status and notes; the recipe's files. `full: true` returns every field as before. On Specula, `start_plan` went from 39,434 to 8,566 bytes and `get_plan` from 39,456 to 8,866. Stored plans and recipes are unchanged.
+- Release: the repository variable `NPM_PUBLISH=false` makes a tag push create the GitHub Release without publishing npm; running the Release workflow by hand with the tag publishes it later.
+
 ## 4.2.0 - 2026-11-05
 
 - Tool groups (the suite-wide convention): every MCP tool is in one group: `core` (always on), `plan`, `verify`, `recipes`, `constraints`, `locks` (`claim_step`, `release_step`, `available_steps`), `notes` (`add_note`), `maintenance`. `TRAMMEL_TOOLS` exposes only the named groups or tools (plus `core`); `TRAMMEL_DISABLE` hides groups or tools. Both combine with `TRAMMEL_MCP_SURFACE`. An unknown name, or `core` in `TRAMMEL_DISABLE`, stops the server with one stderr line and exit code 2. A call to a hidden tool returns `tool "claim_step" is disabled (group "locks") by TRAMMEL_DISABLE; remove "locks" from it to enable`. When a switch is set, the `initialize` instructions end with one line naming the groups on and off, and `status` adds `tool_groups`. With neither set, `initialize` and `tools/list` match 4.1.0 except `tools.listChanged`; `tests/goldens/mcp_default_*.jsonl` (recorded from a 4.1.0 build, that field updated) enforce it. The CLI is unchanged.

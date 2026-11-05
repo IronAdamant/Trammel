@@ -154,7 +154,10 @@ jobs:
   npm:
     name: npm registry
     needs: [version, github-release]
-    if: always() && needs.version.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.github-release.result == 'success')
+    # Set the repository variable NPM_PUBLISH to "false" to cut a tag and a
+    # GitHub release without publishing to npm. Running this workflow by hand
+    # (workflow_dispatch with the tag) publishes that release later.
+    if: always() && needs.version.result == 'success' && (github.event_name == 'workflow_dispatch' || (needs.github-release.result == 'success' && vars.NPM_PUBLISH != 'false'))
     runs-on: ubuntu-24.04
     steps:
       # The tagged commit, so the wrapper's optionalDependencies match the release.

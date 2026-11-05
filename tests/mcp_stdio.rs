@@ -241,12 +241,13 @@ fn unknown_names_and_core_stop_the_server_with_exit_2() {
 }
 
 /// `initialize` and `tools/list` with no group switches, byte for byte as
-/// Trammel 4.1.0 answered them (recorded from a 4.1.0 build; the server
-/// version is masked). The one deliberate difference: since 4.2.0
-/// `capabilities.tools.listChanged` is true, because AGENTS.md can change
-/// the list mid-session. Run for the primary and the full surface.
+/// recorded in `tests/goldens/mcp_default_*.jsonl` (server version masked).
+/// First recorded from a 4.1.0 build; changed on purpose since then:
+/// 4.2.0 `capabilities.tools.listChanged` true, 4.3.0 the `full` argument
+/// on start_plan, decompose, get_plan, resume and get_recipe. Any other
+/// difference fails, so the default surface only changes deliberately.
 #[test]
-fn default_output_is_byte_identical_to_the_last_release() {
+fn default_output_matches_the_recorded_golden() {
     let requests = [
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"golden","version":"0"}}}"#,
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,

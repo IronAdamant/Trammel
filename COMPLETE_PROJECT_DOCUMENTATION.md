@@ -1,7 +1,7 @@
 # Trammel: project documentation index
 
 **Updated:** 2026-11-04
-**Version:** 4.2.0 (Rust binary and npm; Cargo.toml is the source). The old Python version lives on the `python-legacy` branch.
+**Version:** 4.3.0 (Rust binary and npm; Cargo.toml is the source). The old Python version lives on the `python-legacy` branch.
 **Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 33 MCP tools, 13 primary. Store is `.trammel/`.
 
 ## Removed from main

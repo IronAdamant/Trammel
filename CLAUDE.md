@@ -50,7 +50,7 @@ The server advertises **33 tools**. Primary surface is 13 (`TRAMMEL_MCP_SURFACE=
 
 ## Release
 
-`.github/workflows/release.yml` runs on a `v*` tag. Its first job fails unless the tag equals the Cargo.toml version and every `npm/*/package.json` and server.json version. It builds six binaries, uploads them with `SHA256SUMS`, then publishes npm. `workflow_dispatch` with a `tag` input republishes an existing release. Do not push a tag from a task branch. Do not create `NPM_TOKEN` in the repo.
+`.github/workflows/release.yml` runs on a `v*` tag. Its first job fails unless the tag equals the Cargo.toml version and every `npm/*/package.json` and server.json version. It builds six binaries, uploads them with `SHA256SUMS`, then publishes npm. `workflow_dispatch` with a `tag` input republishes an existing release. With the repository variable `NPM_PUBLISH` set to `false`, a tag push skips npm (the GitHub Release still happens); a later `workflow_dispatch` publishes it. Do not push a tag from a task branch. Do not create `NPM_TOKEN` in the repo.
 
 ## Benchmarks
 

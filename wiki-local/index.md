@@ -1,6 +1,6 @@
 # Trammel wiki (local)
 
-**Version:** 4.2.0
+**Version:** 4.3.0
 
 This folder is the short local guide. Root files stay the canonical references.
 

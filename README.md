@@ -234,7 +234,7 @@ CI runs these on Linux, macOS, and Windows. The crate has no dependencies and `[
 | `npm/` | The npm wrapper and six platform packages |
 | `bench/` | Recorded Python and Rust timings |
 
-Releases: a `v*` tag runs `.github/workflows/release.yml`, which checks that the tag matches the version in Cargo.toml, the npm packages and server.json, builds six binaries (Linux musl, macOS, and Windows, each x64 and arm64), uploads them with `SHA256SUMS`, and publishes the npm packages. `scripts/release.sh` checks the version and prints the tag command; it does not publish. `server.json` is the MCP Registry manifest for `io.github.IronAdamant/trammel`. Changes are in [CHANGELOG.md](CHANGELOG.md).
+Releases: a `v*` tag runs `.github/workflows/release.yml`, which checks that the tag matches the version in Cargo.toml, the npm packages and server.json, builds six binaries (Linux musl, macOS, and Windows, each x64 and arm64), uploads them with `SHA256SUMS`, and publishes the npm packages. `scripts/release.sh` checks the version and prints the tag command; it does not publish. To cut a tag and a GitHub Release without publishing to npm, set the repository variable `NPM_PUBLISH` to `false` before tagging, then run the Release workflow by hand with that tag later (and remove the variable). `server.json` is the MCP Registry manifest for `io.github.IronAdamant/trammel`. Changes are in [CHANGELOG.md](CHANGELOG.md).
 
 Trammel works on its own. With [Stele](https://github.com/IronAdamant/stele-context) and [Chisel](https://github.com/IronAdamant/Chisel) the three meet at the MCP layer, with no code dependency between them.
 

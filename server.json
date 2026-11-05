@@ -3,7 +3,7 @@
   "name": "io.github.IronAdamant/trammel",
   "title": "Trammel",
   "description": "Dependency-aware planning, verification, and recipe memory for coding agents.",
-  "version": "4.2.0",
+  "version": "4.3.0",
   "repository": {
     "url": "https://github.com/IronAdamant/Trammel",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@iron_adamant/trammel",
-      "version": "4.2.0",
+      "version": "4.3.0",
       "runtimeHint": "npx",
       "packageArguments": [
         {
