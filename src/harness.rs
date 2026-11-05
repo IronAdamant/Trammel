@@ -127,8 +127,13 @@ fn program(name: &str) -> PathBuf {
 /// skipping Store aliases while any real install exists.
 pub fn python_cmd() -> Vec<String> {
     if !cfg!(windows) { return vec!["python3".into()]; }
-    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
-    windows_python(std::env::var_os("PATH").as_deref(), &pathext)
+    // Searching PATH x PATHEXT costs tens of milliseconds on Windows; the
+    // answer does not change while the server runs.
+    static CHOICE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    CHOICE.get_or_init(|| {
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        windows_python(std::env::var_os("PATH").as_deref(), &pathext)
+    }).clone()
 }
 
 /// The Windows choice behind `python_cmd`, for a given PATH and PATHEXT.
@@ -193,6 +198,11 @@ fn cap_text(text: &str, cap: usize, full: bool) -> (String, bool) {
     let chars: Vec<char> = text.chars().collect();
     if chars.len() > tail { out.extend(chars[chars.len() - tail..].iter()); }
     (out, true)
+}
+
+/// True when every edit passes the bracket check.
+pub fn preflight_ok(edits: &[(String, String)]) -> bool {
+    edits.iter().all(|(path, content)| bracket_errors(path.rsplit('.').next().unwrap_or(""), content).is_empty())
 }
 
 fn preflight(edits: &[(String, String)]) -> Value {

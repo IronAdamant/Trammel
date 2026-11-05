@@ -292,14 +292,19 @@ fn complete(args: &Value, store: &mut Store) -> Result<Value, Failure> {
 fn verify_step(args: &Value, fallback: &Path) -> Value {
     let root = arg_path(args, "project_root").unwrap_or_else(|| fallback.to_path_buf());
     let edits = edits_of(args);
-    let cfg = config::load(&root);
-    let language = crate::canon::get(args, "language").and_then(crate::canon::as_str).map(|s| s.to_string()).unwrap_or_else(|| analyze::detect(&root, &cfg));
-    let test_cmd = match crate::canon::get(args, "test_cmd") {
-        Some(Value::Array(items)) => items.iter().filter_map(crate::canon::as_str).map(|s| s.to_string()).collect(),
-        Some(Value::String(text)) => config::split_cmd(text),
-        _ => config::resolve_test_cmd(None, &cfg, analyze::test_cmd(&language, &root)),
-    };
     let full = crate::canon::get(args, "full_output").and_then(crate::canon::as_bool).unwrap_or(false);
+    // Only work out a test command when it will run: a failed preflight
+    // answers at once, and an explicit or configured command needs no
+    // language detection.
+    let test_cmd = if !harness::preflight_ok(&edits) {
+        Vec::new()
+    } else {
+        match crate::canon::get(args, "test_cmd") {
+            Some(Value::Array(items)) => items.iter().filter_map(crate::canon::as_str).map(|s| s.to_string()).collect(),
+            Some(Value::String(text)) => config::split_cmd(text),
+            _ => analyze::default_test_cmd(&root, crate::canon::get(args, "language").and_then(crate::canon::as_str)),
+        }
+    };
     harness::verify(&VerifyRequest { edits, root, test_cmd, timeout: Duration::from_secs(60), full_output: full, cap: harness::default_cap() })
 }
 

@@ -330,7 +330,7 @@ pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: O
         None => None,
     };
     let cmd = test_cmd.map(|c| c.to_vec()).filter(|c| !c.is_empty()).unwrap_or_else(|| {
-        analyze::test_cmd(request.language.as_deref().unwrap_or("python"), &request.root)
+        analyze::default_test_cmd(&request.root, request.language.as_deref())
     });
     let mut outcomes = Vec::with_capacity(beams.len());
     std::thread::scope(|scope| {

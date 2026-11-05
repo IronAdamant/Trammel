@@ -168,16 +168,3 @@ pub fn merge_keywords(goal: std::collections::BTreeSet<String>, extra: &[String]
     out
 }
 
-pub fn resolve_test_cmd(explicit: Option<Vec<String>>, cfg: &ProjectConfig, default_cmd: Vec<String>) -> Vec<String> {
-    if let Some(cmd) = explicit {
-        if !cmd.is_empty() {
-            return cmd;
-        }
-    }
-    if let Some(cmd) = &cfg.test_cmd {
-        if !cmd.is_empty() {
-            return cmd.clone();
-        }
-    }
-    default_cmd
-}
