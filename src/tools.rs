@@ -7,7 +7,7 @@ use crate::json::Value;
 use crate::lang::analyze;
 use crate::planner::{self, Request};
 use crate::root::{find_root, legacy_db, store_dir};
-use crate::store::{self, Store};
+use crate::store::{self, ClaimError, Store};
 use crate::strategies;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -190,7 +190,15 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             let plan = required_i64(args, "plan_id")?;
             let step = required_i64(args, "step_id")?;
             let agent = required_str(args, "agent_id")?;
-            store.unwrap().claim(plan, step, &agent).map_err(|e| step_failure(e, "claim_held", "Pick another step from available_steps, or wait for the 10 minute expiry"))?;
+            store.unwrap().claim(plan, step, &agent).map_err(|e| match e {
+                ClaimError::NotFound => step_failure("step not found".into(), "step_not_found", ""),
+                ClaimError::Held(owner) => Failure::new("claim_held", format!("claimed by {owner}"), "Pick another step from available_steps, or wait for the 10 minute expiry"),
+                ClaimError::Blocked(ids) => Failure::new(
+                    "step_blocked",
+                    format!("step {step} depends on steps {} that are not passed or skipped", ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")),
+                    format!("Finish or record steps {:?} first, or call available_steps for steps you can claim now", ids),
+                ),
+            })?;
             Ok(crate::canon::obj(vec![("claimed", Value::Bool(true)), ("step_id", Value::Int(step))]))
         }
         "release_step" => {

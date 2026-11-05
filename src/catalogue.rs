@@ -75,7 +75,7 @@ const TOOLS: &[Tool] = &[
         params: &[PLAN_ID], extra: &[VERIFY] },
     Tool { name: "record_steps", description: "Set the status of plan steps, e.g. after verify_step passes. Unknown ids are listed in not_found.",
         params: &[("steps", "steps", true, "[{step_id, status}]. step_id is the step `id` from get_plan. Status: pending, running, passed, failed or skipped.")], extra: &[] },
-    Tool { name: "claim_step", description: "Claim a step for one agent so others skip it. A claim expires after 10 minutes; claiming again refreshes it.",
+    Tool { name: "claim_step", description: "Claim a step for one agent so others skip it. Refused (step_blocked) until the steps it depends on are passed or skipped. A claim expires after 10 minutes; claiming again refreshes it.",
         params: &[("plan_id", "integer", true, "Plan id."), STEP_ID, AGENT_ID], extra: &[] },
     Tool { name: "release_step", description: "Drop your claim on a step so another agent can take it.",
         params: &[STEP_ID, AGENT_ID], extra: &[] },

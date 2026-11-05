@@ -98,6 +98,7 @@ fn an_agent_can_fill_arguments_from_tools_list_and_act_on_errors() {
         call(6, "decompose", "{}"),
         call(7, "claim_step", r#"{"plan_id":1,"step_id":1,"agent_id":"agent-a"}"#),
         call(8, "claim_step", r#"{"plan_id":1,"step_id":1,"agent_id":"agent-b"}"#),
+        call(9, "claim_step", r#"{"plan_id":1,"step_id":2,"agent_id":"agent-b"}"#),
     ], &dir);
     let tools = match at(&replies[0], &["result", "tools"]) { trammel::json::Value::Array(items) => items.clone(), _ => panic!() };
     assert_eq!(tools.len(), 33);
@@ -125,6 +126,10 @@ fn an_agent_can_fill_arguments_from_tools_list_and_act_on_errors() {
     // Agent A holds step 1, so agent B is told to pick another one.
     assert_eq!(trammel::canon::as_bool(at(&replies[6], &["result", "structuredContent", "claimed"])), Some(true));
     assert_eq!(trammel::canon::as_str(at(&replies[7], &["result", "structuredContent", "code"])), Some("claim_held"));
+    // store.py (step 2) depends on models.py (step 1), which is claimed but not done.
+    assert_eq!(trammel::canon::as_str(at(&replies[8], &["result", "structuredContent", "code"])), Some("step_blocked"));
+    let blocked = trammel::canon::as_str(at(&replies[8], &["result", "structuredContent", "hint"])).unwrap();
+    assert!(blocked.contains("[1]") && blocked.contains("available_steps"), "{blocked}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

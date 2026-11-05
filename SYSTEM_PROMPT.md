@@ -31,7 +31,7 @@ Use it for changes that span several files, for work you may hand to another age
 These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name either way.
 
 - `available_steps(plan_id, agent_id)` returns the steps you can take now: pending or running, not claimed by another agent, and every step they depend on `passed` or `skipped`.
-- `claim_step(plan_id, step_id, agent_id)` before you start. A claim held by someone else returns `claim_held`; pick another step. Claims expire after 10 minutes; claiming again refreshes yours.
+- `claim_step(plan_id, step_id, agent_id)` before you start. A claim held by someone else returns `claim_held`, and a step whose dependencies are not done returns `step_blocked` with the blocking step ids; pick another step. Claims expire after 10 minutes; claiming again refreshes yours.
 - `record_steps` when a step passes, then `release_step(step_id, agent_id)`.
 - Use a stable `agent_id` per agent, such as its role or session name.
 
@@ -69,7 +69,7 @@ These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name 
 | Tool | Arguments (**required**) | What it does |
 |---|---|---|
 | `available_steps` | **agent_id**, **plan_id** | Steps of a plan that are ready: pending or running, not claimed by another agent, and every step they depend on passed or skipped. |
-| `claim_step` | **agent_id**, **plan_id**, **step_id** | Claim a step for one agent so others skip it. A claim expires after 10 minutes; claiming again refreshes it. |
+| `claim_step` | **agent_id**, **plan_id**, **step_id** | Claim a step for one agent so others skip it. Refused (step_blocked) until the steps it depends on are passed or skipped. A claim expires after 10 minutes; claiming again refreshes it. |
 | `deactivate_constraint` | **constraint_id** | Turn off a constraint that no longer applies. |
 | `estimate` | language, scope | Count the source files a plan would analyze, to decide whether to pass scope first. |
 | `explore` | expand_repo, focus_globs, focus_keywords, **goal**, language, max_files, max_steps, num_beams, relevant_only, scope, strict_greenfield, summary_only, suppress_creation_hints | Plan a change and return num_beams alternative step orderings (bottom_up, top_down, ...). Read-only. |

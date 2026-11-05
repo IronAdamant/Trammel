@@ -12,7 +12,7 @@ The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 de
 - `doctor` no longer prints `schema_version` twice.
 - `initialize` echoes `2025-03-26` and `2024-11-05` as well, so older SDK clients connect.
 - `verify_step` preflight is language-aware (no false alarms on 1,242 real files) and a failed preflight is `success: false`, without running tests. Large non-Python files preflight in linear time.
-- `available_steps` only offers steps whose dependencies are passed or skipped.
+- `available_steps` only offers steps whose dependencies are passed or skipped, and `claim_step` refuses a blocked step with `step_blocked`, naming the blocking step ids.
 - New primary tool `add_note`: free-text handoff notes on a plan, returned by `get_plan` and `resume`.
 - `prune_recipes`, `prune_plans` and `validate_recipes` do what they say (3.x rules) instead of returning `removed: 0`. `history` returns trajectories; the goal command records one per beam and closes its plan.
 - After `trammel migrate`, new rows get ids after the migrated ones instead of reusing 1, 2, ... The migrate tests read a committed 3.15.3 database, so the test suite needs no Python.

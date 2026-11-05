@@ -352,14 +352,34 @@ impl Store {
         rows
     }
 
-    pub fn claim(&mut self, plan_id: i64, step_id: i64, agent: &str) -> Result<(), String> {
+    /// Ids of the steps `step_id` depends on that are not passed, skipped,
+    /// completed or done yet.
+    pub fn blocking_steps(&self, plan_id: i64, step_id: i64) -> Vec<i64> {
+        let steps: Vec<&Value> = self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).collect();
+        let Some(step) = steps.iter().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id)) else { return Vec::new() };
+        let deps = step_deps(step);
+        steps.iter()
+            .filter(|row| canon::get(row, "step_index").and_then(canon::as_i64).map(|i| deps.contains(&i)).unwrap_or(false))
+            .filter(|row| !is_done(canon::get(row, "status").and_then(canon::as_str).unwrap_or("")))
+            .filter_map(|row| canon::get(row, "id").and_then(canon::as_i64))
+            .collect()
+    }
+
+    /// Claim a step for `agent`. Refused when the step is not in the plan,
+    /// when another agent holds a live claim, or when a step it depends on
+    /// is not done.
+    pub fn claim(&mut self, plan_id: i64, step_id: i64, agent: &str) -> Result<(), ClaimError> {
         let now = now_secs();
+        let blocking = self.blocking_steps(plan_id, step_id);
         let rows = self.table_mut("steps");
-        let row = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).ok_or("step not found")?;
+        let row = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).ok_or(ClaimError::NotFound)?;
         if let (Some(owner), Some(at)) = (canon::get(row, "claimed_by").and_then(canon::as_str), canon::get(row, "claimed_at").and_then(canon::as_f64)) {
             if owner != agent && now - at < 600.0 {
-                return Err(format!("claimed by {owner}"));
+                return Err(ClaimError::Held(owner.to_string()));
             }
+        }
+        if !blocking.is_empty() {
+            return Err(ClaimError::Blocked(blocking));
         }
         canon::insert(row, "claimed_by", Value::string(agent));
         canon::insert(row, "claimed_at", Value::Float(now));
@@ -533,6 +553,14 @@ fn recipe_code_terms(row: &Value) -> BTreeSet<String> {
     terms
 }
 
+/// Why a claim was refused.
+#[derive(Debug, PartialEq)]
+pub enum ClaimError {
+    NotFound,
+    Held(String),
+    Blocked(Vec<i64>),
+}
+
 /// Step statuses that satisfy a dependency.
 pub fn is_done(status: &str) -> bool {
     matches!(status, "passed" | "skipped" | "completed" | "done")
@@ -667,6 +695,23 @@ mod tests {
         for row in store.table_mut("recipes") { canon::insert(row, "updated", Value::Float(0.0)); }
         assert_eq!(store.prune_recipes(90.0, 0.1), 1, "only the never-successful old recipe");
         assert_eq!(store.rows("recipes").len(), 1);
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_step_cannot_be_claimed_before_its_dependencies_are_done() {
+        let (dir, mut store) = temp_store("claimdeps");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[]), step("b.py", &[]), step("c.py", &[0, 1])]))]);
+        let plan = store.create_plan("goal", &strategy);
+        let ids: Vec<i64> = canon::get(&store.get_plan(plan).unwrap(), "steps").and_then(canon::as_array).unwrap().iter().filter_map(|s| canon::get(s, "id").and_then(canon::as_i64)).collect();
+        let (a, b, c) = (ids[0], ids[1], ids[2]);
+        assert_eq!(store.claim(plan, c, "x"), Err(ClaimError::Blocked(vec![a, b])));
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(a)), ("status", Value::string("passed"))])]);
+        assert_eq!(store.claim(plan, c, "x"), Err(ClaimError::Blocked(vec![b])));
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(b)), ("status", Value::string("skipped"))])]);
+        assert_eq!(store.claim(plan, c, "x"), Ok(()));
+        assert_eq!(store.claim(plan, 999, "x"), Err(ClaimError::NotFound));
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }
