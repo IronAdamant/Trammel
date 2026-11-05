@@ -2,6 +2,11 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
 
+## 4.2.0 - 2026-11-05
+
+- Tool groups (the suite-wide convention): every MCP tool is in one group: `core` (always on), `plan`, `verify`, `recipes`, `constraints`, `locks` (`claim_step`, `release_step`, `available_steps`), `notes` (`add_note`), `maintenance`. `TRAMMEL_TOOLS` exposes only the named groups or tools (plus `core`); `TRAMMEL_DISABLE` hides groups or tools. Both combine with `TRAMMEL_MCP_SURFACE`. An unknown name, or `core` in `TRAMMEL_DISABLE`, stops the server with one stderr line and exit code 2. A call to a hidden tool returns `tool "claim_step" is disabled (group "locks") by TRAMMEL_DISABLE; remove "locks" from it to enable`. When a switch is set, the `initialize` instructions end with one line naming the groups on and off, and `status` adds `tool_groups`. With neither set, `initialize` and `tools/list` match 4.1.0 except `tools.listChanged`; `tests/goldens/mcp_default_*.jsonl` (recorded from a 4.1.0 build, that field updated) enforce it. The CLI is unchanged.
+- Agents choose the groups: an `agent-tools` block in the project's AGENTS.md (`trammel: tools ...` / `trammel: disable ...`). Env vars override it per key. Mistakes in the file are warnings in the `initialize` instructions and `status` (`tool_group_warnings`), never fatal. The server stats the file on every request; when an edit changes the tool list it sends `notifications/tools/list_changed` before the reply, and `initialize` now advertises `capabilities.tools.listChanged: true` (4.1.0 said false), so a client that connected before a block existed still refreshes. Apart from that field, with no block and no env switch `initialize` and `tools/list` are byte-identical to 4.1.0, with or without an AGENTS.md.
+
 ## 4.1.0 - 2026-11-05
 
 - Version 4.1.0 in every manifest. Tests read `CARGO_PKG_VERSION`, so a bump only edits Cargo.toml, Cargo.lock, `npm/*/package.json` and server.json. `install.sh` / `install.ps1` fetch the latest release unless `TRAMMEL_VERSION` pins one.

@@ -24,7 +24,7 @@ Those checks are std-only Rust in `examples/`, run from the repo root. No Python
 - `src/lang/symbols.rs`, `src/lang/imports.rs`: hand-written extractors.
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs`: decompose and the nine beams. Rules are `data/patterns.json`.
 - `src/store.rs`: `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
-- `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces. `src/catalogue.rs`: tool descriptions and input schemas for `tools/list`.
+- `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces. `src/catalogue.rs`: tool descriptions and input schemas for `tools/list`. `src/groups.rs`: tool groups and the `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` switches.
 - `src/benchstat.rs`: the regression rule.
 
 ## Add a language
@@ -36,7 +36,7 @@ Those checks are std-only Rust in `examples/`, run from the repo root. No Python
 
 ## MCP
 
-The Rust server advertises **33 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 13 (the 3.x twelve plus `add_note`). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
+The Rust server advertises **33 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 13 (the 3.x twelve plus `add_note`). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, a group in `src/groups.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
 
 ## Tied implicit edges
 
@@ -55,3 +55,26 @@ The npm wrapper is `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `n
 ## Benchmarks
 
 A PR is slower only when both are true: the 95% median intervals do not overlap in the slow direction, and the Holm-adjusted one-sided Mann-Whitney p is below 0.05. There is no percentage tolerance. `benchstat` tests cover an A/A run (must pass) and an injected slowdown (must fail). Rust medians must also stay under the recorded Python floors in `examples/bench_gate.rs`.
+
+## Choosing groups
+
+Pick Trammel's groups for a project by adding a line to the project's own AGENTS.md (its root, next to `.git`). The server re-reads it on every request and tells the client the tool list changed, so no restart is needed.
+
+````markdown
+```agent-tools
+trammel: disable locks, notes
+```
+````
+
+| Group | For | Turn it off when |
+|---|---|---|
+| `core` | start_plan, get_plan, resume, complete_plan, decompose, status | Never (always on). |
+| `plan` | alternative orderings, plan lists, merging, export, estimates | You only start, read and complete plans. |
+| `verify` | running the tests on a copy with your edits | You run the tests yourself every time. |
+| `recipes` | reusing strategies that worked for similar goals | Work is one-off and nothing repeats. |
+| `constraints` | rules and failure history every agent reads | The project keeps its rules elsewhere. |
+| `locks` | claims so several agents don't take the same step | One agent works on the project, or CoordinationHub manages leases. |
+| `notes` | handoff notes on a plan | One session does the whole job, or handoffs go through another tool (wikifier journal, CoordinationHub messages). |
+| `maintenance` | pruning old plans and recipes, usage counts | Almost always; turn it on to clean up a long-lived store. |
+
+Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.

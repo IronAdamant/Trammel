@@ -56,6 +56,63 @@ Any client with a JSON config (Cursor, Claude Desktop, and others):
 
 The server speaks stdio (protocols `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`) and works on the project in its working directory; every tool also takes `project_root`. `tools/list` shows 13 primary tools with full input schemas. Set `TRAMMEL_MCP_SURFACE=all` in the server's environment to list all 33, including the multi-agent tools.
 
+### Tool groups
+
+Every tool is in one group. Agents choose a project's groups in its AGENTS.md (see Choosing groups below); an operator can override with two variables in the server's `env`. Either way, an agent running several suite tools keeps only the parts it uses. They shape the MCP listing only; the CLI is unchanged.
+
+| Group | Tools | Overlaps with |
+|---|---|---|
+| `core` (always on) | `start_plan`, `decompose`, `get_plan`, `resume`, `complete_plan`, `status` | |
+| `plan` | `explore`, `list_plans`, `update_plan_status`, `merge_plans`, `export_plan`, `record_steps`, `history`, `estimate`, `list_strategies` | |
+| `verify` | `verify_step`, `verify_plan` | |
+| `recipes` | `save_recipe`, `get_recipe`, `list_recipes` | |
+| `constraints` | `add_constraint`, `get_constraints`, `deactivate_constraint`, `resolve_failure`, `failure_history` | |
+| `locks` | `claim_step`, `release_step`, `available_steps` | Chisel locks, CoordinationHub leases |
+| `notes` | `add_note` | wikifier journal notes |
+| `maintenance` | `prune_recipes`, `prune_plans`, `validate_recipes`, `usage_stats` | |
+
+- `TRAMMEL_TOOLS`: comma-separated groups and/or tool names to expose (plus `core`); `all` means everything. When set, it replaces the `TRAMMEL_MCP_SURFACE` default listing.
+- `TRAMMEL_DISABLE`: comma-separated groups and/or tool names to hide, applied after `TRAMMEL_TOOLS`. `core` cannot be disabled.
+- Case and spaces are ignored. An unknown name (or `core` in `TRAMMEL_DISABLE`) stops the server at startup with one line on stderr and exit code 2, so the client shows it as failed. A call to a hidden tool returns an error that says which variable or AGENTS.md line to change.
+- Precedence, per key: `TRAMMEL_TOOLS` over the AGENTS.md `tools` line, `TRAMMEL_DISABLE` over the `disable` line, then the built-in default.
+
+```json
+{
+  "mcpServers": {
+    "trammel": {
+      "command": "npx",
+      "args": ["-y", "@iron_adamant/trammel", "mcp"],
+      "env": {"TRAMMEL_DISABLE": "locks,notes"}
+    }
+  }
+}
+```
+
+### Choosing groups
+
+Pick Trammel's groups for a project by adding a line to the project's own AGENTS.md (its root, next to `.git`). The server re-reads it on every request and tells the client the tool list changed, so no restart is needed.
+
+````markdown
+```agent-tools
+trammel: disable locks, notes
+```
+````
+
+| Group | For | Turn it off when |
+|---|---|---|
+| `core` | start_plan, get_plan, resume, complete_plan, decompose, status | Never (always on). |
+| `plan` | alternative orderings, plan lists, merging, export, estimates | You only start, read and complete plans. |
+| `verify` | running the tests on a copy with your edits | You run the tests yourself every time. |
+| `recipes` | reusing strategies that worked for similar goals | Work is one-off and nothing repeats. |
+| `constraints` | rules and failure history every agent reads | The project keeps its rules elsewhere. |
+| `locks` | claims so several agents don't take the same step | One agent works on the project, or CoordinationHub manages leases. |
+| `notes` | handoff notes on a plan | One session does the whole job, or handoffs go through another tool (wikifier journal, CoordinationHub messages). |
+| `maintenance` | pruning old plans and recipes, usage counts | Almost always; turn it on to clean up a long-lived store. |
+
+Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.
+
+`tools/list` sizes: default 10,993 bytes; with `TRAMMEL_MCP_SURFACE=all` 23,894, minus `locks` 21,856, minus `notes` 23,132, minus both 21,094; `TRAMMEL_TOOLS=core` 6,044.
+
 A typical loop:
 
 1. `get_constraints` and `get_recipe` for anything learned earlier.
