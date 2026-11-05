@@ -3,7 +3,8 @@
 
 use crate::canon::stable;
 use crate::contract::{self, Failure};
-use crate::groups::Switches;
+use crate::groups::{self, Switches};
+use std::time::SystemTime;
 use crate::json::{self, Value};
 use crate::tools;
 use std::io::{self, BufRead, Write};
@@ -22,10 +23,12 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     let mut line = String::new();
     let surface = std::env::var("TRAMMEL_MCP_SURFACE").unwrap_or_else(|_| "primary".into());
     let telemetry = std::env::var("TRAMMEL_TELEMETRY").ok().as_deref() == Some("1");
+    let surface_all = surface == "all" || surface == "full";
     // A typo in TRAMMEL_TOOLS / TRAMMEL_DISABLE stops the server, so the
     // client shows it as failed instead of silently serving the wrong tools.
-    let switches = match Switches::from_env() {
-        Ok(switches) => switches,
+    let cwd = std::env::current_dir().unwrap_or_else(|_| path_buf_from("."));
+    let mut live = match LiveGroups::start(&crate::root::find_root(&cwd)) {
+        Ok(live) => live,
         Err(message) => {
             eprintln!("{message}");
             std::process::exit(2);
@@ -44,11 +47,17 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
         let method = crate::canon::get(&message, "method").and_then(crate::canon::as_str).unwrap_or("");
         if id.is_none() { continue; }
         let params = crate::canon::get(&message, "params").cloned().unwrap_or(Value::Object(vec![]));
+        // An agent may edit the agent-tools block mid-session. Re-read it when
+        // it changed and tell the client before answering.
+        if live.refresh(surface_all) {
+            notify("notifications/tools/list_changed");
+        }
+        let switches = &live.switches;
         match method {
-            "initialize" => reply(id, initialize(&params, &switches)),
-            "server/discover" => reply(id, discover(&surface, &switches)),
-            "tools/list" => reply(id, crate::canon::obj(vec![("tools", Value::Array(catalogue(&surface, &switches)))])),
-            "tools/call" => reply(id, tool_call(&params, store.as_deref(), telemetry, &switches)),
+            "initialize" => reply(id, initialize(&params, switches)),
+            "server/discover" => reply(id, discover(&surface, switches)),
+            "tools/list" => reply(id, crate::canon::obj(vec![("tools", Value::Array(catalogue(&surface, switches)))])),
+            "tools/call" => reply(id, tool_call(&params, store.as_deref(), telemetry, switches)),
             "ping" => reply(id, Value::Object(vec![])),
             _ => reply_err(id, -32601, "method not found"),
         }
@@ -56,26 +65,87 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// The tool groups in force: env vars (fixed for the session) plus the
+/// project's AGENTS.md `agent-tools` block, re-read when it changes.
+struct LiveGroups {
+    env_tools: Option<String>,
+    env_disable: Option<String>,
+    path: PathBuf,
+    stamp: Option<(SystemTime, u64)>,
+    switches: Switches,
+}
+
+impl LiveGroups {
+    fn start(root: &std::path::Path) -> Result<LiveGroups, String> {
+        let mut live = LiveGroups {
+            env_tools: std::env::var("TRAMMEL_TOOLS").ok(),
+            env_disable: std::env::var("TRAMMEL_DISABLE").ok(),
+            path: root.join("AGENTS.md"),
+            stamp: None,
+            switches: Switches::default(),
+        };
+        live.stamp = live.stamp_now();
+        live.switches = Switches::resolve(live.env_tools.as_deref(), live.env_disable.as_deref(), &live.read())?;
+        Ok(live)
+    }
+
+    /// Modification time and size: a cheap test for "the file changed".
+    fn stamp_now(&self) -> Option<(SystemTime, u64)> {
+        let meta = std::fs::metadata(&self.path).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
+    }
+
+    fn read(&self) -> groups::AgentLines {
+        std::fs::read_to_string(&self.path).map(|text| groups::agent_lines(&text)).unwrap_or_default()
+    }
+
+    /// Re-read AGENTS.md if it changed. True when the listing changed.
+    fn refresh(&mut self, surface_all: bool) -> bool {
+        let stamp = self.stamp_now();
+        if stamp == self.stamp { return false; }
+        self.stamp = stamp;
+        // The env vars were checked at startup, so only file lines can be
+        // wrong here, and those become warnings.
+        let Ok(next) = Switches::resolve(self.env_tools.as_deref(), self.env_disable.as_deref(), &self.read()) else { return false };
+        let changed = next.listing(surface_all) != self.switches.listing(surface_all);
+        self.switches = next;
+        changed
+    }
+}
+
 fn initialize(params: &Value, switches: &Switches) -> Value {
     let requested = crate::canon::get(params, "protocolVersion").and_then(crate::canon::as_str).unwrap_or("2025-06-18");
     let version = if PROTOCOLS.contains(&requested) { requested } else { "2025-11-25" };
     crate::canon::obj(vec![
         ("protocolVersion", Value::string(version)),
-        ("capabilities", crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(false))]))])),
+        ("capabilities", capabilities(switches)),
         ("serverInfo", server_info()),
-        ("instructions", Value::string(match switches.summary() {
-            // One last line, only when a switch is set.
-            Some(groups) => format!("{INSTRUCTIONS}\n{groups}"),
+        ("instructions", Value::string(match switches.instruction_lines() {
+            // Group lines only when a switch or an agent-tools block is in use,
+            // so the default reply stays as it was.
+            Some(lines) => format!("{INSTRUCTIONS}\n{lines}"),
             None => INSTRUCTIONS.to_string(),
         })),
     ])
+}
+
+/// `tools.listChanged` is true once groups are in play (an env switch or an
+/// agent-tools block), because edits to the block change the list live.
+fn capabilities(switches: &Switches) -> Value {
+    crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(switches.active()))]))])
+}
+
+fn notify(method: &str) {
+    let body = crate::canon::obj(vec![("jsonrpc", Value::string("2.0")), ("method", Value::string(method))]);
+    println!("{}", stable(&body));
+    let _ = io::stdout().flush();
 }
 
 fn discover(surface: &str, switches: &Switches) -> Value {
     crate::canon::obj(vec![
         ("protocolVersion", Value::string("2026-07-28")),
         ("serverInfo", server_info()),
-        ("capabilities", crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(false))]))])),
+        ("capabilities", capabilities(switches)),
         ("tools", Value::Array(catalogue(surface, switches))),
     ])
 }
@@ -118,6 +188,9 @@ fn tool_call(params: &Value, store: Option<&std::path::Path>, telemetry: bool, s
         Ok(mut value) => {
             if name == "status" {
                 if let Some(groups) = switches.summary() { crate::canon::insert(&mut value, "tool_groups", Value::string(groups)); }
+                if !switches.warnings().is_empty() {
+                    crate::canon::insert(&mut value, "tool_group_warnings", Value::Array(switches.warnings().iter().cloned().map(Value::String).collect()));
+                }
             }
             content(value, false)
         }

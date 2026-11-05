@@ -1,8 +1,17 @@
-//! MCP tool groups and the `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` switches,
-//! following the suite-wide tool-groups convention. Every tool is in one
-//! group. `core` is always on. `locks` and `notes` are the suite's shared
-//! names for features other tools also offer. The switches shape only the
-//! MCP surface; with neither set, nothing changes.
+//! MCP tool groups, following the suite-wide tool-groups convention.
+//!
+//! Every tool is in one group. `core` is always on. `locks` and `notes` are
+//! the suite's shared names for features other tools also offer. Two sources
+//! switch groups or single tools off, applied per key (`tools`, `disable`):
+//!
+//! 1. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` (the operator). A bad name stops
+//!    the server with exit code 2.
+//! 2. An `agent-tools` block in the project's AGENTS.md (an agent):
+//!    `trammel: tools <list>` / `trammel: disable <list>`. A bad line is
+//!    ignored with a warning; it never stops the server.
+//!
+//! The switches shape only the MCP surface. With neither source in use,
+//! nothing changes.
 
 use std::collections::BTreeSet;
 
@@ -20,74 +29,164 @@ pub const GROUPS: &[(&str, &[&str])] = &[
 
 pub const CORE: &str = "core";
 
+/// This tool's name in an `agent-tools` block.
+pub const BLOCK_NAME: &str = "trammel";
+
 pub fn group_of(tool: &str) -> Option<&'static str> {
     GROUPS.iter().find(|(_, tools)| tools.contains(&tool)).map(|(group, _)| *group)
 }
 
-/// Which variable turned a tool off, and the word to change in it.
+/// Where a key's value came from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Source {
+    Env,
+    File,
+}
+
+/// Why a tool is off, and the word to change.
 #[derive(Clone, Debug, PartialEq)]
 enum Off {
-    /// Not named in `TRAMMEL_TOOLS`.
-    NotSelected,
-    /// Named in `TRAMMEL_DISABLE` by this token (a group or the tool).
-    Disabled(String),
+    NotSelected(Source),
+    Disabled(String, Source),
+}
+
+/// Trammel's lines from the first `agent-tools` block of an AGENTS.md.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentLines {
+    /// The file has an `agent-tools` block (for any tool).
+    pub block: bool,
+    pub tools: Vec<String>,
+    pub disable: Vec<String>,
+}
+
+/// A fence line: its character, its length, and the info string after it.
+fn fence_of(line: &str) -> Option<(char, usize, &str)> {
+    let first = line.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let len = line.chars().take_while(|c| *c == first).count();
+    (len >= 3).then(|| (first, len, line[len..].trim()))
+}
+
+/// Read the first top-level fenced block whose info string is `agent-tools`
+/// and keep this tool's `tools` / `disable` lines. `#` starts a comment.
+/// Fences inside other fences are content, so an example block shown in a
+/// ````markdown fence does not count.
+pub fn agent_lines(markdown: &str) -> AgentLines {
+    let mut out = AgentLines::default();
+    // The open fence, if any, and whether it is the agent-tools block.
+    let mut open: Option<(char, usize, bool)> = None;
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        match open {
+            None => {
+                if let Some((ch, len, info)) = fence_of(trimmed) {
+                    let ours = info == "agent-tools";
+                    open = Some((ch, len, ours));
+                    if ours { out.block = true; }
+                }
+            }
+            Some((ch, len, ours)) => {
+                if let Some((c, l, info)) = fence_of(trimmed) {
+                    if c == ch && l >= len && info.is_empty() {
+                        if ours { break; }
+                        open = None;
+                        continue;
+                    }
+                }
+                if !ours { continue; }
+                let content = trimmed.split('#').next().unwrap_or("").trim();
+                let Some((tool, rest)) = content.split_once(':') else { continue };
+                if tool.trim().to_ascii_lowercase() != BLOCK_NAME { continue; }
+                let rest = rest.trim();
+                let (key, list) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                match key.to_ascii_lowercase().as_str() {
+                    "tools" => out.tools.push(list.trim().to_string()),
+                    "disable" => out.disable.push(list.trim().to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Switches {
-    /// Tools chosen by `TRAMMEL_TOOLS` (core included), when it is set.
-    selected: Option<BTreeSet<&'static str>>,
-    /// Tools hidden by `TRAMMEL_DISABLE`, with the token that hid them.
-    disabled: Vec<(&'static str, String)>,
+    /// Tools chosen by a `tools` key (core included), when one is in force.
+    selected: Option<(BTreeSet<&'static str>, Source)>,
+    /// Tools hidden by a `disable` key, with the token that hid them.
+    disabled: Vec<(&'static str, String, Source)>,
+    /// The project's AGENTS.md has an `agent-tools` block.
+    block: bool,
+    /// Ignored AGENTS.md lines, one sentence each.
+    warnings: Vec<String>,
+}
+
+enum Problem {
+    Unknown(String),
+    Core(String),
 }
 
 impl Switches {
-    pub fn from_env() -> Result<Switches, String> {
-        Switches::parse(std::env::var("TRAMMEL_TOOLS").ok().as_deref(), std::env::var("TRAMMEL_DISABLE").ok().as_deref())
-    }
-
-    /// Parse the two variables. An empty value counts as unset. Any unknown
-    /// name, or an attempt to turn off `core`, is an error naming the variable.
+    /// From the environment only (no AGENTS.md).
     pub fn parse(tools: Option<&str>, disable: Option<&str>) -> Result<Switches, String> {
-        let mut switches = Switches::default();
-        if let Some(raw) = tools.filter(|v| !v.trim().is_empty()) {
-            let mut chosen: BTreeSet<&'static str> = core_tools().collect();
-            for token in tokens(raw) {
-                if token == "all" {
-                    chosen.extend(all_tools());
-                    continue;
-                }
-                chosen.extend(resolve("TRAMMEL_TOOLS", &token)?);
-            }
-            switches.selected = Some(chosen);
-        }
-        if let Some(raw) = disable.filter(|v| !v.trim().is_empty()) {
-            for token in tokens(raw) {
-                let hit = resolve("TRAMMEL_DISABLE", &token)?;
-                if hit.iter().any(|t| group_of(t) == Some(CORE)) {
-                    return Err(format!("TRAMMEL_DISABLE: \"{token}\" is in group \"core\", which is always on; {}", known()));
-                }
-                for tool in hit {
-                    if !switches.disabled.iter().any(|(t, _)| *t == tool) {
-                        switches.disabled.push((tool, token.clone()));
-                    }
-                }
-            }
-        }
-        Ok(switches)
+        Switches::resolve(tools, disable, &AgentLines::default())
     }
 
-    /// True when either variable is set.
+    /// Combine the env vars with the AGENTS.md lines, per key: a set env var
+    /// wins over the file's line for the same key. Env errors are returned
+    /// (the caller exits 2); file errors become warnings.
+    pub fn resolve(env_tools: Option<&str>, env_disable: Option<&str>, file: &AgentLines) -> Result<Switches, String> {
+        let mut s = Switches { block: file.block, ..Switches::default() };
+        let env_tools = env_tools.filter(|v| !v.trim().is_empty());
+        let env_disable = env_disable.filter(|v| !v.trim().is_empty());
+
+        if let Some(raw) = env_tools {
+            let picked = select(raw).map_err(|p| env_error("TRAMMEL_TOOLS", p))?;
+            s.selected = Some((picked, Source::Env));
+        } else {
+            let mut picked: Option<BTreeSet<&'static str>> = None;
+            for line in &file.tools {
+                match select(line) {
+                    Ok(tools) => picked.get_or_insert_with(BTreeSet::new).extend(tools),
+                    Err(p) => s.warnings.push(file_warning(p)),
+                }
+            }
+            s.selected = picked.map(|tools| (tools, Source::File));
+        }
+
+        if let Some(raw) = env_disable {
+            for (tool, token) in hide(raw).map_err(|p| env_error("TRAMMEL_DISABLE", p))? {
+                s.add_disabled(tool, token, Source::Env);
+            }
+        } else {
+            for line in &file.disable {
+                match hide(line) {
+                    Ok(hits) => for (tool, token) in hits { s.add_disabled(tool, token, Source::File) },
+                    Err(p) => s.warnings.push(file_warning(p)),
+                }
+            }
+        }
+        Ok(s)
+    }
+
+    fn add_disabled(&mut self, tool: &'static str, token: String, source: Source) {
+        if !self.disabled.iter().any(|(t, _, _)| *t == tool) {
+            self.disabled.push((tool, token, source));
+        }
+    }
+
+    /// True when anything shapes the surface or should be reported: an env
+    /// var, an `agent-tools` block, or a warning about one.
     pub fn active(&self) -> bool {
-        self.selected.is_some() || !self.disabled.is_empty()
+        self.selected.is_some() || !self.disabled.is_empty() || self.block || !self.warnings.is_empty()
     }
 
     fn off(&self, tool: &str) -> Option<Off> {
-        if let Some((_, token)) = self.disabled.iter().find(|(t, _)| *t == tool) {
-            return Some(Off::Disabled(token.clone()));
+        if let Some((_, token, source)) = self.disabled.iter().find(|(t, _, _)| *t == tool) {
+            return Some(Off::Disabled(token.clone(), *source));
         }
         match &self.selected {
-            Some(chosen) if !chosen.contains(tool) => Some(Off::NotSelected),
+            Some((chosen, source)) if !chosen.contains(tool) => Some(Off::NotSelected(*source)),
             _ => None,
         }
     }
@@ -105,13 +204,14 @@ impl Switches {
         let group = group_of(tool).unwrap_or("");
         match self.off(tool) {
             None => Ok(()),
-            Some(Off::Disabled(token)) => Err(format!("tool \"{tool}\" is disabled (group \"{group}\") by TRAMMEL_DISABLE; remove \"{token}\" from it to enable")),
-            Some(Off::NotSelected) => Err(format!("tool \"{tool}\" is disabled (group \"{group}\") by TRAMMEL_TOOLS; add \"{group}\" to it to enable")),
+            Some(Off::Disabled(token, Source::Env)) => Err(format!("tool \"{tool}\" is disabled (group \"{group}\") by TRAMMEL_DISABLE; remove \"{token}\" from it to enable")),
+            Some(Off::Disabled(token, Source::File)) => Err(format!("tool \"{tool}\" is disabled (group \"{group}\") by AGENTS.md agent-tools; remove \"{token}\" from the \"{BLOCK_NAME}: disable\" line to enable")),
+            Some(Off::NotSelected(Source::Env)) => Err(format!("tool \"{tool}\" is disabled (group \"{group}\") by TRAMMEL_TOOLS; add \"{group}\" to it to enable")),
+            Some(Off::NotSelected(Source::File)) => Err(format!("tool \"{tool}\" is disabled (group \"{group}\") by AGENTS.md agent-tools; add \"{group}\" to the \"{BLOCK_NAME}: tools\" line to enable")),
         }
     }
 
-    /// One line for `initialize` and `status` when a switch is set, e.g.
-    /// `Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes.`
+    /// One line naming the groups on and off, and how an agent changes them.
     pub fn summary(&self) -> Option<String> {
         if !self.active() { return None; }
         let (mut on, mut off) = (Vec::new(), Vec::new());
@@ -124,12 +224,30 @@ impl Switches {
             }
         }
         let off = if off.is_empty() { String::new() } else { format!("; off: {}", off.join(", ")) };
-        Some(format!("Tool groups on: {}{off}.", on.join(", ")))
+        Some(format!("Tool groups on: {}{off}. Change them in AGENTS.md with an agent-tools line such as \"{BLOCK_NAME}: disable locks, notes\".", on.join(", ")))
+    }
+
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    /// Lines appended to the `initialize` instructions: the summary, then
+    /// any AGENTS.md warnings. None when nothing is switched.
+    pub fn instruction_lines(&self) -> Option<String> {
+        let mut lines = vec![self.summary()?];
+        lines.extend(self.warnings.iter().cloned());
+        Some(lines.join("\n"))
+    }
+
+    /// The tools `tools/list` shows for a surface, to tell when a file change
+    /// changed the listing.
+    pub fn listing(&self, surface_all: bool) -> Vec<&'static str> {
+        all_tools().filter(|t| self.listed(t, surface_all || crate::tools::PRIMARY.contains(t))).collect()
     }
 }
 
 fn tokens(raw: &str) -> Vec<String> {
-    raw.split(',').map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty()).collect()
+    raw.split(|c: char| c == ',' || c.is_whitespace()).map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty()).collect()
 }
 
 fn core_tools() -> impl Iterator<Item = &'static str> {
@@ -140,21 +258,58 @@ fn all_tools() -> impl Iterator<Item = &'static str> {
     GROUPS.iter().flat_map(|(_, tools)| tools.iter().copied())
 }
 
-fn resolve(var: &str, token: &str) -> Result<Vec<&'static str>, String> {
+fn lookup(token: &str) -> Option<Vec<&'static str>> {
     if let Some((_, tools)) = GROUPS.iter().find(|(group, _)| *group == token) {
-        return Ok(tools.to_vec());
+        return Some(tools.to_vec());
     }
-    if let Some(tool) = all_tools().find(|t| *t == token) {
-        return Ok(vec![tool]);
-    }
-    Err(format!("{var}: unknown group \"{token}\"; {}", known()))
+    all_tools().find(|t| *t == token).map(|t| vec![t])
 }
 
-fn known() -> String {
-    let groups: Vec<&str> = GROUPS.iter().map(|(g, _)| *g).collect();
+/// A `tools` list: core plus the named groups and tools (`all` = everything).
+fn select(raw: &str) -> Result<BTreeSet<&'static str>, Problem> {
+    let mut chosen: BTreeSet<&'static str> = core_tools().collect();
+    for token in tokens(raw) {
+        if token == "all" {
+            chosen.extend(all_tools());
+            continue;
+        }
+        chosen.extend(lookup(&token).ok_or(Problem::Unknown(token))?);
+    }
+    Ok(chosen)
+}
+
+/// A `disable` list: the tools it hides, each with the token that named it.
+fn hide(raw: &str) -> Result<Vec<(&'static str, String)>, Problem> {
+    let mut out = Vec::new();
+    for token in tokens(raw) {
+        let hit = lookup(&token).ok_or_else(|| Problem::Unknown(token.clone()))?;
+        if hit.iter().any(|t| group_of(t) == Some(CORE)) {
+            return Err(Problem::Core(token));
+        }
+        out.extend(hit.into_iter().map(|t| (t, token.clone())));
+    }
+    Ok(out)
+}
+
+fn group_names() -> String {
+    GROUPS.iter().map(|(g, _)| *g).collect::<Vec<_>>().join(", ")
+}
+
+fn env_error(var: &str, problem: Problem) -> String {
     let mut tools: Vec<&str> = all_tools().collect();
     tools.sort();
-    format!("groups: {}; tools: {}", groups.join(", "), tools.join(", "))
+    let known = format!("groups: {}; tools: {}", group_names(), tools.join(", "));
+    match problem {
+        Problem::Unknown(token) => format!("{var}: unknown group \"{token}\"; {known}"),
+        Problem::Core(token) => format!("{var}: \"{token}\" is in group \"core\", which is always on; {known}"),
+    }
+}
+
+fn file_warning(problem: Problem) -> String {
+    match problem {
+        Problem::Unknown(token) => format!("AGENTS.md agent-tools: unknown group \"{token}\" for {BLOCK_NAME}; groups: {}", group_names()),
+        Problem::Core(token) => format!("AGENTS.md agent-tools: \"{token}\" is in group \"core\", which is always on, for {BLOCK_NAME}; that line is ignored"),
+    }
 }
 
 #[cfg(test)]
@@ -176,9 +331,10 @@ mod tests {
         for (tools, disable) in [(None, None), (Some(""), Some("  "))] {
             let s = Switches::parse(tools, disable).unwrap();
             assert!(!s.active());
-            assert!(s.listed("claim_step", false) == false && s.listed("start_plan", true));
+            assert!(!s.listed("claim_step", false) && s.listed("start_plan", true));
             assert!(s.check_call("claim_step").is_ok());
             assert_eq!(s.summary(), None);
+            assert_eq!(s.instruction_lines(), None);
         }
     }
 
@@ -193,5 +349,50 @@ mod tests {
         assert!(Switches::parse(None, Some("core")).unwrap_err().contains("always on"));
         assert!(Switches::parse(None, Some("status")).unwrap_err().contains("always on"));
         assert!(Switches::parse(Some("all"), None).unwrap().listed("prune_plans", false));
+    }
+
+    const FILE: &str = "# Project\n\n```sh\ntrammel: disable verify\n```\n\n```agent-tools\n# one agent works here\ntrammel: disable locks notes   # coordinationhub owns leases\nchisel: disable locks, history\nTRAMMEL: tools all\n```\n\n```agent-tools\ntrammel: disable recipes\n```\n";
+
+    #[test]
+    fn the_first_agent_tools_block_gives_this_tools_lines() {
+        let lines = agent_lines(FILE);
+        assert_eq!(lines, AgentLines { block: true, tools: vec!["all".into()], disable: vec!["locks notes".into()] });
+        assert_eq!(agent_lines("# no block here\n"), AgentLines::default());
+        assert_eq!(agent_lines("~~~agent-tools\nother: disable x\n~~~\n"), AgentLines { block: true, ..AgentLines::default() });
+        // An example shown inside a longer fence is not a block.
+        assert_eq!(agent_lines("````markdown\n```agent-tools\ntrammel: disable locks\n```\n````\n"), AgentLines::default());
+        // This repo's AGENTS.md documents the block that way, so it switches nothing.
+        let own = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/AGENTS.md")).unwrap();
+        assert!(own.contains("```agent-tools"));
+        assert_eq!(agent_lines(&own), AgentLines::default());
+    }
+
+    #[test]
+    fn env_beats_the_file_per_key() {
+        let file = agent_lines(FILE);
+        let s = Switches::resolve(None, None, &file).unwrap();
+        assert!(!s.listed("claim_step", true) && !s.listed("add_note", true) && s.listed("prune_plans", false));
+        assert_eq!(s.check_call("claim_step").unwrap_err(), "tool \"claim_step\" is disabled (group \"locks\") by AGENTS.md agent-tools; remove \"locks\" from the \"trammel: disable\" line to enable");
+        // TRAMMEL_DISABLE replaces the file's disable line; the file's tools line still applies.
+        let s = Switches::resolve(None, Some("notes"), &file).unwrap();
+        assert!(s.listed("claim_step", false) && !s.listed("add_note", true) && s.listed("prune_plans", false));
+        // TRAMMEL_TOOLS replaces the file's tools line; the file's disable line still applies.
+        let s = Switches::resolve(Some("verify"), None, &file).unwrap();
+        assert!(!s.listed("prune_plans", true) && !s.listed("claim_step", true) && s.listed("verify_step", false));
+    }
+
+    #[test]
+    fn file_mistakes_are_warnings_never_errors() {
+        let file = agent_lines("```agent-tools\ntrammel: disable lokcs\ntrammel: disable core\ntrammel: disable notes\n```\n");
+        let s = Switches::resolve(None, None, &file).unwrap();
+        assert_eq!(s.warnings(), [
+            "AGENTS.md agent-tools: unknown group \"lokcs\" for trammel; groups: core, plan, verify, recipes, constraints, locks, notes, maintenance".to_string(),
+            "AGENTS.md agent-tools: \"core\" is in group \"core\", which is always on, for trammel; that line is ignored".to_string(),
+        ]);
+        // The good line still applies; the bad ones change nothing.
+        assert!(!s.listed("add_note", true) && s.listed("status", true));
+        let text = s.instruction_lines().unwrap();
+        assert_eq!(text.lines().count(), 3);
+        assert!(text.starts_with("Tool groups on: core, plan, verify, recipes, constraints, locks, maintenance; off: notes."));
     }
 }

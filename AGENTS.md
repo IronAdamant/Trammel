@@ -55,3 +55,26 @@ The npm wrapper is `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `n
 ## Benchmarks
 
 A PR is slower only when both are true: the 95% median intervals do not overlap in the slow direction, and the Holm-adjusted one-sided Mann-Whitney p is below 0.05. There is no percentage tolerance. `benchstat` tests cover an A/A run (must pass) and an injected slowdown (must fail). Rust medians must also stay under the recorded Python floors in `examples/bench_gate.rs`.
+
+## Choosing groups
+
+Pick Trammel's groups for a project by adding a line to the project's own AGENTS.md (its root, next to `.git`). The server re-reads it on every request and tells the client the tool list changed, so no restart is needed.
+
+````markdown
+```agent-tools
+trammel: disable locks, notes
+```
+````
+
+| Group | For | Turn it off when |
+|---|---|---|
+| `core` | start_plan, get_plan, resume, complete_plan, decompose, status | Never (always on). |
+| `plan` | alternative orderings, plan lists, merging, export, estimates | You only start, read and complete plans. |
+| `verify` | running the tests on a copy with your edits | You run the tests yourself every time. |
+| `recipes` | reusing strategies that worked for similar goals | Work is one-off and nothing repeats. |
+| `constraints` | rules and failure history every agent reads | The project keeps its rules elsewhere. |
+| `locks` | claims so several agents don't take the same step | One agent works on the project, or CoordinationHub manages leases. |
+| `notes` | handoff notes on a plan | One session does the whole job, or handoffs go through another tool (wikifier journal, CoordinationHub messages). |
+| `maintenance` | pruning old plans and recipes, usage counts | Almost always; turn it on to clean up a long-lived store. |
+
+Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.

@@ -46,7 +46,9 @@ These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name 
 
 ## Tool groups
 
-The server may hide some groups (`TRAMMEL_TOOLS`, `TRAMMEL_DISABLE` in its `env`). A hidden tool answers with an error naming the variable that hid it; use the tools you are given rather than asking for hidden ones. `core` is always there.
+The server may hide some groups. A hidden tool answers with an error naming what hid it. `core` is always there.
+
+You can choose the groups for the project yourself: add an `agent-tools` block to the project's AGENTS.md, for example `trammel: disable locks, notes` when you are the only agent, or `trammel: tools core, verify` to keep only planning and verification. The server picks up the change on your next request and the client refreshes the tool list. If a line has a typo, the `initialize` instructions and `status` show a warning and the line is ignored. Env vars set by the operator (`TRAMMEL_TOOLS`, `TRAMMEL_DISABLE`) win over the file.
 
 | Group | Tools | Overlaps with |
 |---|---|---|
@@ -58,6 +60,29 @@ The server may hide some groups (`TRAMMEL_TOOLS`, `TRAMMEL_DISABLE` in its `env`
 | `locks` | `claim_step`, `release_step`, `available_steps` | Chisel locks, CoordinationHub leases |
 | `notes` | `add_note` | wikifier journal notes |
 | `maintenance` | `prune_recipes`, `prune_plans`, `validate_recipes`, `usage_stats` | |
+
+### Choosing groups
+
+Add a line to the project's own AGENTS.md (its root, next to `.git`). The server re-reads it on every request and tells the client the tool list changed, so no restart is needed.
+
+````markdown
+```agent-tools
+trammel: disable locks, notes
+```
+````
+
+| Group | For | Turn it off when |
+|---|---|---|
+| `core` | start_plan, get_plan, resume, complete_plan, decompose, status | Never (always on). |
+| `plan` | alternative orderings, plan lists, merging, export, estimates | You only start, read and complete plans. |
+| `verify` | running the tests on a copy with your edits | You run the tests yourself every time. |
+| `recipes` | reusing strategies that worked for similar goals | Work is one-off and nothing repeats. |
+| `constraints` | rules and failure history every agent reads | The project keeps its rules elsewhere. |
+| `locks` | claims so several agents don't take the same step | One agent works on the project, or CoordinationHub manages leases. |
+| `notes` | handoff notes on a plan | One session does the whole job, or handoffs go through another tool (wikifier journal, CoordinationHub messages). |
+| `maintenance` | pruning old plans and recipes, usage counts | Almost always; turn it on to clean up a long-lived store. |
+
+Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.
 
 ## Tool reference
 

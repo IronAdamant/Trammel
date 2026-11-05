@@ -186,7 +186,7 @@ fn without_switches_the_listing_and_instructions_are_unchanged() {
     assert!(!trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().contains("Tool groups"));
     let (_, replies, _) = switched(&[("TRAMMEL_DISABLE", "locks,notes")], &[init]);
     let instructions = trammel::canon::as_str(at(&replies[0], &["result", "instructions"])).unwrap().to_string();
-    assert_eq!(instructions.lines().last(), Some("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes."));
+    assert_eq!(instructions.lines().last(), Some("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes. Change them in AGENTS.md with an agent-tools line such as \"trammel: disable locks, notes\"."));
     assert_eq!(instructions.lines().count(), 2);
 }
 
@@ -250,9 +250,11 @@ fn default_output_is_byte_identical_to_the_last_release() {
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
     ];
     let current = format!("\"name\":\"trammel\",\"version\":\"{}\"", env!("CARGO_PKG_VERSION"));
-    for surface in ["primary", "all"] {
+    let bare = project("golden-bare", None);
+    let documented = project("golden-doc", Some("# Notes\n\n```sh\ntrammel: disable locks\n```\n"));
+    for (surface, dir) in [("primary", &bare), ("all", &bare), ("primary", &documented), ("all", &documented)] {
         let mut child = Command::new(trammel_mcp_bin())
-            .current_dir(std::env::temp_dir())
+            .current_dir(dir)
             .env_remove("TRAMMEL_TOOLS")
             .env_remove("TRAMMEL_DISABLE")
             .env("TRAMMEL_MCP_SURFACE", surface)
@@ -270,4 +272,99 @@ fn default_output_is_byte_identical_to_the_last_release() {
         let want = std::fs::read_to_string(&golden_path).unwrap().replace("\r\n", "\n");
         assert!(got == want, "{surface}: default MCP output differs from {}", golden_path.display());
     }
+}
+
+/// A fresh project directory, optionally with an AGENTS.md.
+fn project(tag: &str, agents: Option<&str>) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("trammel-groups-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    if let Some(text) = agents { std::fs::write(dir.join("AGENTS.md"), text).unwrap(); }
+    dir
+}
+
+/// A running server in `dir` for line-by-line exchanges.
+struct Live { child: std::process::Child, stdin: std::process::ChildStdin, lines: std::io::Lines<BufReader<std::process::ChildStdout>> }
+
+impl Live {
+    fn start(dir: &std::path::Path, envs: &[(&str, &str)]) -> Live {
+        let mut cmd = Command::new(trammel_mcp_bin());
+        cmd.current_dir(dir).env_remove("TRAMMEL_TOOLS").env_remove("TRAMMEL_DISABLE").env("TRAMMEL_MCP_SURFACE", "all");
+        for (k, v) in envs { cmd.env(k, v); }
+        let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        Live { child, stdin, lines }
+    }
+
+    fn send(&mut self, request: &str) { writeln!(self.stdin, "{request}").unwrap(); self.stdin.flush().unwrap(); }
+
+    fn next(&mut self) -> trammel::json::Value { trammel::json::parse(&self.lines.next().unwrap().unwrap()).unwrap() }
+
+    fn finish(mut self) { drop(self.stdin); let _ = self.child.wait(); }
+}
+
+const INIT: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}"#;
+const LIST: &str = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+
+fn tool_names(reply: &trammel::json::Value) -> Vec<String> {
+    let trammel::json::Value::Array(tools) = at(reply, &["result", "tools"]).clone() else { panic!("{}", trammel::canon::stable(reply)) };
+    tools.iter().map(|t| trammel::canon::as_str(at(t, &["name"])).unwrap().to_string()).collect()
+}
+
+#[test]
+fn an_agent_tools_block_in_agents_md_chooses_the_groups() {
+    let dir = project("block", Some("# Project\n\n```agent-tools\n# one agent works here\ntrammel: disable locks, notes\ntrammel: disable lokcs\nchisel: disable locks, history\n```\n"));
+    let mut live = Live::start(&dir, &[]);
+    live.send(INIT);
+    let init = live.next();
+    assert_eq!(trammel::canon::as_bool(at(&init, &["result", "capabilities", "tools", "listChanged"])), Some(true));
+    let instructions = trammel::canon::as_str(at(&init, &["result", "instructions"])).unwrap().to_string();
+    let tail: Vec<&str> = instructions.lines().rev().take(2).collect();
+    assert_eq!(tail[0], r#"AGENTS.md agent-tools: unknown group "lokcs" for trammel; groups: core, plan, verify, recipes, constraints, locks, notes, maintenance"#);
+    assert!(tail[1].starts_with("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes. Change them in AGENTS.md"), "{}", tail[1]);
+    live.send(LIST);
+    let names = tool_names(&live.next());
+    assert_eq!(names.len(), 29);
+    assert!(!names.iter().any(|n| ["claim_step", "release_step", "available_steps", "add_note"].contains(&n.as_str())));
+    live.send(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_note","arguments":{}}}"#);
+    let reply = live.next();
+    assert_eq!(trammel::canon::as_str(at(&reply, &["result", "structuredContent", "message"])), Some(r#"tool "add_note" is disabled (group "notes") by AGENTS.md agent-tools; remove "notes" from the "trammel: disable" line to enable"#));
+    live.send(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{}}}"#);
+    let status = live.next();
+    assert!(trammel::canon::stable(at(&status, &["result", "structuredContent", "tool_group_warnings"])).contains("lokcs"));
+    live.finish();
+    // The operator's variable wins over the file's line for the same key.
+    let mut live = Live::start(&dir, &[("TRAMMEL_DISABLE", "notes")]);
+    live.send(LIST);
+    let names = tool_names(&live.next());
+    assert!(names.contains(&"claim_step".to_string()) && !names.contains(&"add_note".to_string()));
+    live.finish();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn editing_the_block_mid_session_updates_the_list_and_notifies() {
+    let dir = project("live", None);
+    let mut live = Live::start(&dir, &[]);
+    live.send(LIST);
+    assert_eq!(tool_names(&live.next()).len(), 33);
+    std::fs::write(dir.join("AGENTS.md"), "```agent-tools\ntrammel: disable locks\n```\n").unwrap();
+    live.send(LIST);
+    let first = live.next();
+    assert_eq!(trammel::canon::as_str(at(&first, &["method"])), Some("notifications/tools/list_changed"), "{}", trammel::canon::stable(&first));
+    assert_eq!(tool_names(&live.next()).len(), 30);
+    // A change that leaves the list as it is sends no notification.
+    std::fs::write(dir.join("AGENTS.md"), "```agent-tools\n# still one agent\ntrammel: disable locks\n```\n").unwrap();
+    live.send(LIST);
+    let reply = live.next();
+    assert!(trammel::canon::get(&reply, "method").is_none());
+    assert_eq!(tool_names(&reply).len(), 30);
+    // Removing the file restores the defaults, with a notification.
+    std::fs::remove_file(dir.join("AGENTS.md")).unwrap();
+    live.send(LIST);
+    assert_eq!(trammel::canon::as_str(at(&live.next(), &["method"])), Some("notifications/tools/list_changed"));
+    assert_eq!(tool_names(&live.next()).len(), 33);
+    live.finish();
+    let _ = std::fs::remove_dir_all(&dir);
 }

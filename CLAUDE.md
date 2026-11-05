@@ -35,7 +35,7 @@ The repo checks are std-only Rust in `examples/` (the Python scripts they replac
 
 ## MCP
 
-The server advertises **33 tools**. Primary surface is 13 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. Tool groups (`src/groups.rs`): `TRAMMEL_TOOLS` and `TRAMMEL_DISABLE` switch groups or tools on and off for MCP; a new tool must be added to one group (a test fails otherwise).
+The server advertises **33 tools**. Primary surface is 13 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. Tool groups (`src/groups.rs`): an `agent-tools` block in the project's AGENTS.md, and `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` (which win per key), switch groups or tools on and off for MCP; the block is re-read live. A new tool must be added to one group (a test fails otherwise). `tests/goldens/mcp_default_*.jsonl` pin the default `initialize` and `tools/list` to 4.1.0.
 
 ## Add a language
 
