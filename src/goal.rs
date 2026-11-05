@@ -8,7 +8,8 @@ const STOP: &[&str] = &[
     "does", "did", "will", "would", "could", "should", "may", "might", "must", "shall", "can",
     "that", "this", "these", "those", "it", "its", "not", "no", "all", "any", "each", "every",
     "some", "into", "about", "up", "out", "then", "than", "so", "very", "just", "also", "too",
-    "only", "new",
+    "only", "new", "their", "them", "they", "there", "others", "other", "per", "when", "where",
+    "which", "while", "what", "whose", "both", "either", "such", "same", "own",
 ];
 
 const CREATION: &[&str] = &[
@@ -69,8 +70,12 @@ fn alpha_parts(word: &str) -> Vec<String> {
 pub fn extract_goal_keywords(goal: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for word in ident_words(&goal.to_lowercase()) {
-        for part in alpha_parts(&word) {
-            if part.len() > 2 && !STOP.contains(&part.as_str()) && !CREATION.contains(&part.as_str())
+        let parts = alpha_parts(&word);
+        // In an identifier such as blocks_build, "build" names the thing,
+        // not the action, so creation verbs stay.
+        let compound = parts.len() > 1;
+        for part in parts {
+            if part.len() > 2 && !STOP.contains(&part.as_str()) && (compound || !CREATION.contains(&part.as_str()))
             {
                 out.insert(part);
             }

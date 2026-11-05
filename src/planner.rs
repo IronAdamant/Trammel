@@ -68,6 +68,9 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         Some(scope) if !scope.is_empty() => request.root.join(scope),
         _ => request.root.clone(),
     };
+    // Directories the goal names ("Sepulcra" -> games/sepulcra). An explicit
+    // scope wins over them.
+    let anchors = if scope.as_deref().map(|s| s.is_empty()).unwrap_or(true) { goal_anchors(&request.root, &keywords) } else { Vec::new() };
     if request.strict_greenfield && goal::has_creation_intent(&request.goal) && goal::extract_paths_from_goal(&request.goal).is_empty() {
         return Err("the goal asks to create files but names no file path, and strict_greenfield is set".into());
     }
@@ -76,7 +79,12 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     if expand && max_files.map(|n| n > 15).unwrap_or(true) {
         max_files = Some(15);
     }
-    let language = request.language.clone().unwrap_or_else(|| analyze::detect(&analysis_root, &cfg));
+    // The language of the code the goal names, when it names a directory:
+    // a Rust crate inside a mostly-Python repo is planned as Rust.
+    let language = request.language.clone().unwrap_or_else(|| match anchors.first() {
+        Some(anchor) => analyze::detect(&request.root.join(anchor), &cfg),
+        None => analyze::detect(&analysis_root, &cfg),
+    });
     let t_symbols = Instant::now();
     let analysis = analyze::analyze(&analysis_root, &language);
     let symbol_ms = t_symbols.elapsed();
@@ -108,7 +116,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     let mut truncated = false;
     if let Some(limit) = max_files {
         if limit >= 0 && order.len() > limit as usize {
-            order = keep_most_relevant(order, limit as usize, &symbols, &relevant, &keywords);
+            order = keep_most_relevant(order, limit as usize, &symbols, &relevant, &keywords, &anchors);
             truncated = true;
             let allowed: BTreeSet<String> = order.iter().cloned().collect();
             symbols.retain(|k, _| allowed.contains(k));
@@ -117,7 +125,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
             all = symbols.keys().cloned().chain(relevant.keys().cloned()).collect();
         }
     }
-    let mut steps = score::generate_steps(&order, &symbols, &relevant, &request.goal, &keywords);
+    let mut steps = score::generate_steps(&order, &symbols, &relevant, &request.goal, &keywords, &anchors);
     if request.relevant_only && !keywords.is_empty() {
         steps.sort_by(|a, b| {
             let ra = canon::get(a, "relevance").and_then(canon::as_f64).unwrap_or(0.0);
@@ -151,6 +159,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         ])),
     ]);
     if truncated { canon::insert(&mut meta, "max_files_truncated", Value::Bool(true)); }
+    if !anchors.is_empty() { canon::insert(&mut meta, "anchors", Value::Array(anchors.iter().cloned().map(Value::String).collect())); }
     let mut result = canon::obj(vec![
         ("goal", Value::string(request.goal.clone())),
         ("steps", Value::Array(steps)),
@@ -171,7 +180,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         ("trammel_blind_spots", Value::Int(blind as i64)),
     ]);
     if !request.suppress_creation_hints {
-        if let Some(hints) = creation_hints(&request.goal, &keywords, &all) {
+        if let Some(hints) = creation_hints(&request.goal, &keywords, &all, &language) {
             canon::insert(&mut result, "creation_hints", hints);
         }
     }
@@ -193,14 +202,14 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
 /// highest step relevance (ties by position) and leave the rest in dependency
 /// order. Files without symbols produce no step, so they go last. Without
 /// keywords, keep the first `limit`, as Python's `core.py` did.
-fn keep_most_relevant(order: Vec<String>, limit: usize, symbols: &BTreeMap<String, Vec<String>>, graph: &BTreeMap<String, Vec<String>>, keywords: &BTreeSet<String>) -> Vec<String> {
+fn keep_most_relevant(order: Vec<String>, limit: usize, symbols: &BTreeMap<String, Vec<String>>, graph: &BTreeMap<String, Vec<String>>, keywords: &BTreeSet<String>, anchors: &[String]) -> Vec<String> {
     if keywords.is_empty() {
         return order.into_iter().take(limit).collect();
     }
     let (indeg, max_in) = score::dep_indegree(graph);
     let mut ranked: Vec<(f64, usize)> = order.iter().enumerate().map(|(i, file)| {
         let names = symbols.get(file).map(|v| v.as_slice()).unwrap_or(&[]);
-        let rank = if names.is_empty() { -1.0 } else { score::relevance_components(file, names, keywords, &indeg, max_in).2 };
+        let rank = if names.is_empty() { -1.0 } else { score::relevance_components(file, names, keywords, &indeg, max_in, anchors).2 };
         (rank, i)
     }).collect();
     ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
@@ -261,7 +270,68 @@ fn ambiguity_value(score: &Ambiguity) -> Value {
     ])
 }
 
-fn creation_hints(goal: &str, keywords: &BTreeSet<String>, files: &BTreeSet<String>) -> Option<Value> {
+/// Directories (relative, `/`-separated) whose name, or whose Cargo.toml /
+/// package.json package name, is one of the goal's words. Nested matches
+/// under an earlier one are dropped. Ignored and hidden directories are
+/// skipped, and the walk stops six levels down.
+pub fn goal_anchors(root: &Path, keywords: &BTreeSet<String>) -> Vec<String> {
+    let variants = goal::keyword_variants(keywords);
+    let mut found: Vec<String> = Vec::new();
+    let mut queue = vec![(root.to_path_buf(), String::new(), 0usize)];
+    while let Some((dir, rel, depth)) = queue.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let mut subdirs: Vec<(String, PathBuf)> = entries.flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)).map(|e| (e.file_name().to_string_lossy().into_owned(), e.path())).collect();
+        subdirs.sort();
+        for (name, path) in subdirs.into_iter().rev() {
+            if name.starts_with('.') || crate::walk::is_ignored_dir(&name) { continue; }
+            let child = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let package = package_name(&path);
+            let hit = variants.contains(&name.to_lowercase()) || package.map(|p| variants.contains(&p)).unwrap_or(false);
+            if hit && !found.iter().any(|f| child.starts_with(&format!("{f}/"))) {
+                found.push(child.clone());
+            }
+            if depth < 6 { queue.push((path, child, depth + 1)); }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The package name a Cargo.toml or package.json in `dir` declares, lowercased
+/// (an npm scope is dropped).
+fn package_name(dir: &Path) -> Option<String> {
+    if let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) {
+        let mut in_package = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') { in_package = line == "[package]"; continue; }
+            if in_package {
+                if let Some(value) = line.strip_prefix("name").map(str::trim).and_then(|r| r.strip_prefix('=')) {
+                    return Some(value.trim().trim_matches('"').to_lowercase());
+                }
+            }
+        }
+    }
+    let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let doc = crate::json::parse(&text).ok()?;
+    let name = canon::get(&doc, "name").and_then(canon::as_str)?;
+    Some(name.rsplit('/').next().unwrap_or(name).to_lowercase())
+}
+
+/// The file extension new code in `dir` should use: the most common one among
+/// its files, else the language's own.
+fn extension_for(siblings: &[String], language: &str) -> String {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for name in siblings {
+        if let Some((_, ext)) = name.rsplit_once('.') { *counts.entry(ext.to_string()).or_default() += 1; }
+    }
+    if let Some((ext, _)) = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))) {
+        return ext;
+    }
+    analyze::extensions(language).first().map(|e| e.trim_start_matches('.').to_string()).unwrap_or_else(|| "txt".into())
+}
+
+fn creation_hints(goal: &str, keywords: &BTreeSet<String>, files: &BTreeSet<String>, language: &str) -> Option<Value> {
     if !goal::has_creation_intent(goal) { return None; }
     let mut dirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for file in files {
@@ -279,9 +349,10 @@ fn creation_hints(goal: &str, keywords: &BTreeSet<String>, files: &BTreeSet<Stri
     for dir in &relevant {
         let siblings = dirs.get(dir).cloned().unwrap_or_default();
         let dir_words = dir.to_lowercase().split(|c: char| !c.is_ascii_lowercase()).filter(|w| !w.is_empty()).map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        let ext = extension_for(&siblings, language);
         for kw in keywords {
             if dir_words.contains(kw) { continue; }
-            let name = format!("{kw}.py");
+            let name = format!("{kw}.{ext}");
             let path = format!("{dir}/{name}");
             if !files.contains(&path) {
                 suggested.push(canon::obj(vec![
@@ -402,7 +473,7 @@ mod cap_tests {
         assert!(files.contains(&"zz_billing.py".to_string()), "{files:?}");
         assert_eq!(canon::get(&result, "analysis_meta").and_then(|m| canon::get(m, "max_files_truncated")).and_then(canon::as_bool), Some(true));
         // Without keywords the cap keeps the first files in dependency order.
-        let plain = keep_most_relevant((0..20).map(|i| format!("f{i:02}")).collect::<Vec<String>>(), 3, &BTreeMap::new(), &BTreeMap::new(), &BTreeSet::new());
+        let plain = keep_most_relevant((0..20).map(|i| format!("f{i:02}")).collect::<Vec<String>>(), 3, &BTreeMap::new(), &BTreeMap::new(), &BTreeSet::new(), &[]);
         assert_eq!(plain, vec!["f00", "f01", "f02"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -438,6 +509,80 @@ mod run_tests {
         assert_eq!(reason.as_deref(), Some("boom"));
         assert!(store.best_recipe("update main in app", 0.55).is_some());
         drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    fn write(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// A workspace where a shared helper is imported everywhere and the goal
+    /// names one game by its directory.
+    fn workspace(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trammel-anchor-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "shared/util.py", "def decorate(x):\n    return x\n\ndef per_item(x):\n    return x\n");
+        for i in 0..12 {
+            write(&dir, &format!("engine/mod_{i:02}.py"), &format!("from shared.util import decorate\n\ndef upper_{i}():\n    return decorate({i})\n"));
+        }
+        write(&dir, "games/sepulcra/map.py", "from shared.util import decorate\n\ndef buildable(cell):\n    return cell\n");
+        write(&dir, "games/sepulcra/content.py", "class PropDef:\n    pass\n");
+        write(&dir, "games/other/engine.py", "def tick():\n    return 0\n");
+        dir
+    }
+
+    #[test]
+    fn a_goal_that_names_a_directory_plans_inside_it() {
+        let dir = workspace("rank");
+        let request = Request::new("add a per-prop blocks_build flag to Sepulcra props: others are decoration only", dir.clone());
+        let result = decompose(&request).unwrap();
+        let meta = canon::get(&result, "analysis_meta").unwrap();
+        assert_eq!(canon::stable(canon::get(meta, "anchors").unwrap()), r#"["games/sepulcra"]"#);
+        let mut steps: Vec<(f64, String)> = canon::get(&result, "steps").and_then(canon::as_array).unwrap().iter()
+            .map(|s| (canon::get(s, "relevance").and_then(canon::as_f64).unwrap_or(0.0), canon::get(s, "file").and_then(canon::as_str).unwrap().to_string()))
+            .collect();
+        steps.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        let top: Vec<&str> = steps.iter().take(2).map(|(_, f)| f.as_str()).collect();
+        assert!(top.contains(&"games/sepulcra/map.py") && top.contains(&"games/sepulcra/content.py"), "{steps:?}");
+        // The helper everything imports no longer outranks the named code.
+        let helper = steps.iter().find(|(_, f)| f == "shared/util.py").map(|(r, _)| *r).unwrap_or(0.0);
+        assert!(helper < steps[1].0, "{steps:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn anchors_match_directory_and_package_names() {
+        let dir = workspace("names");
+        write(&dir, "crates/eng/Cargo.toml", "[package]\nname = \"pathfinder\"\nversion = \"0.1.0\"\n");
+        let words = |s: &str| goal::extract_goal_keywords(s);
+        assert_eq!(goal_anchors(&dir, &words("speed up the pathfinder")), vec!["crates/eng"]);
+        assert_eq!(goal_anchors(&dir, &words("fix Sepulcra props")), vec!["games/sepulcra"]);
+        assert!(goal_anchors(&dir, &words("rename a helper")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identifier_parts_stay_keywords_and_new_files_follow_their_neighbours() {
+        let keywords = goal::extract_goal_keywords("add a per-prop blocks_build flag; others are marked");
+        assert!(keywords.contains("build") && keywords.contains("blocks") && keywords.contains("prop"), "{keywords:?}");
+        assert!(!keywords.contains("per") && !keywords.contains("others"), "{keywords:?}");
+        let dir = std::env::temp_dir().join(format!("trammel-hints-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "Cargo.toml", "[package]\nname = \"sepulcra\"\nversion = \"0.1.0\"\n");
+        write(&dir, "src/lib.rs", "pub mod map;\n");
+        write(&dir, "src/map.rs", "pub fn buildable() -> bool { true }\n");
+        let request = Request::new("create a props module for the map in src", dir.clone());
+        let result = decompose(&request).unwrap();
+        let hints = canon::stable(canon::get(&result, "creation_hints").unwrap());
+        assert!(hints.contains("src/props.rs"), "{hints}");
+        assert!(!hints.contains(".py"), "{hints}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

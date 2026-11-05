@@ -75,12 +75,19 @@ pub fn dep_indegree(graph: &BTreeMap<String, Vec<String>>) -> (BTreeMap<String, 
     (indeg, max)
 }
 
+/// `(keyword score, graph score, composite)` for one file.
+///
+/// `anchors` are the directories the goal names (a crate, package, or folder
+/// whose name is a goal word). When there are any, being inside one counts
+/// for 30% and import count only for 10%, so the code the goal is about
+/// beats shared helpers that everything imports.
 pub fn relevance_components(
     filepath: &str,
     symbols: &[String],
     keywords: &BTreeSet<String>,
     indegree: &BTreeMap<String, i32>,
     max_indegree: i32,
+    anchors: &[String],
 ) -> (f64, f64, f64) {
     if keywords.is_empty() {
         return (1.0, 0.0, 1.0);
@@ -106,8 +113,10 @@ pub fn relevance_components(
     for kw in keywords {
         if !matched.contains(kw) {
             let kw_lc = kw.to_lowercase();
-            if kw_lc.len() >= 3
-                && candidates.iter().any(|cw| kw_lc.contains(cw) || cw.contains(&kw_lc))
+            // A shared prefix of four letters or more (prop / props /
+            // property). A substring anywhere ("per" in "upper") is noise.
+            if kw_lc.len() >= 4
+                && candidates.iter().any(|cw| cw.len() >= 4 && (cw.starts_with(&kw_lc) || kw_lc.starts_with(cw.as_str())))
             {
                 partial += 0.5;
             }
@@ -121,7 +130,12 @@ pub fn relevance_components(
         let raw = *indegree.get(filepath).unwrap_or(&0) as f64;
         (1.0 + raw).ln() / (1.0 + max_indegree as f64).ln()
     };
-    let composite = ALPHA * keyword_score + (1.0 - ALPHA) * graph_boost;
+    let composite = if anchors.is_empty() {
+        ALPHA * keyword_score + (1.0 - ALPHA) * graph_boost
+    } else {
+        let near = if anchors.iter().any(|a| filepath.starts_with(&format!("{a}/"))) { 1.0 } else { 0.0 };
+        0.6 * keyword_score + 0.1 * graph_boost + 0.3 * near
+    };
     (keyword_score, graph_boost, composite)
 }
 
@@ -214,6 +228,7 @@ pub fn generate_steps(
     graph: &BTreeMap<String, Vec<String>>,
     goal: &str,
     keywords: &BTreeSet<String>,
+    anchors: &[String],
 ) -> Vec<Value> {
     let _ = extract_goal_keywords;
     let (indeg, max_in) = dep_indegree(graph);
@@ -227,7 +242,7 @@ pub fn generate_steps(
         let comps = if keywords.is_empty() {
             None
         } else {
-            Some(relevance_components(filepath, names, keywords, &indeg, max_in))
+            Some(relevance_components(filepath, names, keywords, &indeg, max_in, anchors))
         };
         let step_idx = steps.len() as i64;
         file_to_step.insert(filepath.clone(), step_idx);
