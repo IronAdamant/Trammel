@@ -220,9 +220,109 @@ pub fn goal_similarity(a: &str, b: &str) -> f64 {
     0.3 * tri + 0.4 * wj + 0.3 * ws
 }
 
+const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "to", "of", "in", "on", "for", "with", "and", "or", "by", "from", "into",
+    "that", "which", "whose", "who", "is", "are", "be", "it", "its", "this", "these", "those",
+    "as", "at", "so", "some", "any", "all", "each", "every", "when", "where", "than", "then",
+    "our", "my", "we", "us", "can", "should", "make", "sure", "new", "use", "using", "via",
+];
+
+/// Words that say the same relation.
+fn relation(word: &str) -> &str {
+    match word {
+        "under" | "beneath" | "less" | "fewer" | "lower" | "underneath" => "below",
+        "over" | "exceed" | "exceeds" | "exceeding" | "greater" => "above",
+        "listing" | "lists" => "list",
+        "show" | "display" | "print" => "show",
+        other => other,
+    }
+}
+
+/// Light suffix stripping: listing -> list, items -> item, fixes -> fix,
+/// entries -> entry. Both sides stem the same way, so `updat` meets `updat`.
+fn stem(word: &str) -> String {
+    let n = word.len();
+    if n > 5 && word.ends_with("ing") { return word[..n - 3].to_string(); }
+    if n > 4 && word.ends_with("ies") { return format!("{}y", &word[..n - 3]); }
+    if n > 4 && ["ses", "xes", "ches", "shes"].iter().any(|s| word.ends_with(s)) { return word[..n - 2].to_string(); }
+    if n > 4 && word.ends_with("ed") { return word[..n - 2].to_string(); }
+    if n > 3 && word.ends_with('s') && !word.ends_with("ss") { return word[..n - 1].to_string(); }
+    word.to_string()
+}
+
+/// The content words of a goal, file path, or symbol, normalized so that
+/// paraphrases meet: `low-stock`, `lowStock` and `low_stock` all give `low`
+/// and `stock`; `listing items under` gives `list`, `item`, `below`.
+pub fn concept_terms(text: &str) -> BTreeSet<String> {
+    let mut spaced = String::new();
+    let mut prev_lower = false;
+    for ch in text.chars() {
+        if ch.is_uppercase() && prev_lower { spaced.push(' '); }
+        prev_lower = ch.is_lowercase();
+        spaced.push(if ch.is_alphanumeric() { ch } else { ' ' });
+    }
+    let mut out = BTreeSet::new();
+    for raw in spaced.to_lowercase().split_whitespace() {
+        let mapped = abbrev(raw);
+        let words: Vec<&str> = if mapped.is_empty() { vec![raw] } else { mapped.split_whitespace().collect() };
+        for word in words {
+            if word.len() < 2 || STOPWORDS.contains(&word) { continue; }
+            let term = verb(relation(&stem(verb(relation(word))))).to_string();
+            if !STOPWORDS.contains(&term.as_str()) { out.insert(term); }
+        }
+    }
+    out
+}
+
+/// Dice overlap of two term sets. A query term the recipe's goal lacks but
+/// one of its files or symbols names (`context`) counts half: the same work
+/// described from the code side.
+pub fn concept_similarity(query: &BTreeSet<String>, recipe: &BTreeSet<String>, context: &BTreeSet<String>) -> f64 {
+    if query.is_empty() || recipe.is_empty() { return 0.0; }
+    let shared = query.intersection(recipe).count() as f64;
+    let via_code = query.iter().filter(|t| !recipe.contains(*t) && context.contains(*t)).count() as f64;
+    (2.0 * (shared + 0.5 * via_code) / (query.len() + recipe.len()) as f64).min(1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STORED: &str = "add a low-stock report listing items whose quantity is below a threshold";
+
+    fn concept(a: &str, b: &str) -> f64 {
+        concept_similarity(&concept_terms(a), &concept_terms(b), &BTreeSet::new())
+    }
+
+    #[test]
+    fn paraphrases_of_a_goal_meet() {
+        let want: BTreeSet<String> = ["below", "item", "list", "low", "stock"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(concept_terms("listing lowStock items_under"), want);
+        // The miss seen in the handoff run: the text blend scored it under 0.55.
+        let query = "report items with low stock under a threshold";
+        assert!(goal_similarity(query, STORED) < 0.55);
+        assert!(concept(query, STORED) >= 0.7, "{}", concept(query, STORED));
+        assert!(concept("fix failing auth tests", "repair the failing authentication test") >= 0.7);
+    }
+
+    #[test]
+    fn different_work_stays_below_the_recipe_threshold() {
+        for other in ["fix the login timeout in the auth module", "add a report of sales by region", "remove the threshold check from the store", "rename the config loader"] {
+            let score = concept(other, STORED).max(goal_similarity(other, STORED));
+            assert!(score < 0.55, "{other}: {score}");
+        }
+    }
+
+    #[test]
+    fn code_words_count_half() {
+        let recipe = concept_terms("add retries");
+        let context = concept_terms("src/http_client.rs sendRequest");
+        let query = concept_terms("add retries to http client");
+        let plain = concept_similarity(&query, &recipe, &BTreeSet::new());
+        let with_code = concept_similarity(&query, &recipe, &context);
+        assert!(with_code > plain, "{plain} {with_code}");
+        assert_eq!(concept_similarity(&concept_terms("delete the cache"), &recipe, &context), 0.0);
+    }
 
     #[test]
     fn identical_goals_score_one() {

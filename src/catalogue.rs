@@ -81,7 +81,7 @@ const TOOLS: &[Tool] = &[
         params: &[("plan_id", "integer", true, "Plan id."), AGENT_ID], extra: &[] },
     Tool { name: "save_recipe", description: "Save a strategy that worked so get_recipe can return it for similar goals.",
         params: &[("goal", "string", true, "The goal the strategy solved."), ("strategy", "object", false, "The strategy object, e.g. a decompose result."), ("outcome", "boolean", false, "Default true.")], extra: &[] },
-    Tool { name: "get_recipe", description: "Return the saved recipe whose goal is most similar to this one (similarity at least 0.55), or {recipe: null}.",
+    Tool { name: "get_recipe", description: "Return the saved recipe whose goal best matches this one, paraphrases included (similarity at least 0.55), or {recipe: null}.",
         params: &[("goal", "string", true, "Goal to match.")], extra: &[] },
     Tool { name: "list_recipes", description: "List saved recipes, most recently updated first.",
         params: &[("limit", "integer", false, "Default 50.")], extra: &[] },

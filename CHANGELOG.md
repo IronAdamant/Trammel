@@ -13,6 +13,7 @@ The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 de
 - `initialize` echoes `2025-03-26` and `2024-11-05` as well, so older SDK clients connect.
 - `verify_step` preflight is language-aware (no false alarms on 1,242 real files) and a failed preflight is `success: false`, without running tests. Large non-Python files preflight in linear time.
 - `available_steps` only offers steps whose dependencies are passed or skipped.
+- `get_recipe` matches paraphrases (stemming, stopwords, relation words, the recipe's files and symbols as half-weight context).
 - The repo checks are std-only Rust (`cargo run --example ...`), replacing `scripts/*.py`.
 
 See MIGRATION.md for details.

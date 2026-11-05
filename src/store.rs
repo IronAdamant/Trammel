@@ -4,7 +4,7 @@
 use crate::canon::{self, canonical};
 use crate::hash::sha256_hex;
 use crate::json::{self, Value};
-use crate::similarity::goal_similarity;
+use crate::similarity::{concept_similarity, concept_terms, goal_similarity};
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -209,11 +209,16 @@ impl Store {
         sig
     }
 
+    /// The recipe closest to `goal`: the higher of the text blend and the
+    /// concept-term overlap, where the recipe's files and symbols count as
+    /// half-weight context.
     pub fn best_recipe(&self, goal: &str, min_similarity: f64) -> Option<Value> {
         let mut best: Option<(f64, Value)> = None;
+        let query = concept_terms(goal);
         for row in self.rows("recipes") {
             let pattern = canon::get(row, "pattern").and_then(canon::as_str).unwrap_or("");
-            let score = goal_similarity(goal, pattern);
+            let context = recipe_code_terms(row);
+            let score = goal_similarity(goal, pattern).max(concept_similarity(&query, &concept_terms(pattern), &context));
             if score + 1e-12 >= min_similarity && best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
                 best = Some((score, row.clone()));
             }
@@ -379,6 +384,23 @@ fn apply_journal(path: &Path, doc: &mut Value) {
     }
 }
 
+/// Terms from the files and symbols a recipe's strategy touched.
+fn recipe_code_terms(row: &Value) -> BTreeSet<String> {
+    let strategy = match canon::get(row, "strategy") {
+        Some(Value::String(text)) => json::parse(text).unwrap_or(Value::Null),
+        Some(other) => other.clone(),
+        None => Value::Null,
+    };
+    let mut terms = BTreeSet::new();
+    for step in canon::get(&strategy, "steps").and_then(canon::as_array).unwrap_or(&[]) {
+        if let Some(file) = canon::get(step, "file").and_then(canon::as_str) { terms.extend(concept_terms(file)); }
+        for symbol in canon::get(step, "symbols").and_then(canon::as_array).unwrap_or(&[]) {
+            if let Some(name) = canon::as_str(symbol) { terms.extend(concept_terms(name)); }
+        }
+    }
+    terms
+}
+
 /// Step statuses that satisfy a dependency.
 pub fn is_done(status: &str) -> bool {
     matches!(status, "passed" | "skipped" | "completed" | "done")
@@ -441,6 +463,20 @@ mod tests {
 
     fn files(rows: &[Value]) -> Vec<String> {
         rows.iter().filter_map(|r| canon::get(r, "file").and_then(canon::as_str).map(String::from)).collect()
+    }
+
+    #[test]
+    fn get_recipe_matches_a_paraphrase_but_not_other_work() {
+        let (dir, mut store) = temp_store("recipe");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![canon::obj(vec![("file", Value::string("inventory/report.py")), ("symbols", Value::Array(vec![Value::string("format_report")]))])]))]);
+        store.save_recipe("add a low-stock report listing items whose quantity is below a threshold", &strategy, true);
+        let hit = store.best_recipe("report items with low stock under a threshold", 0.55).expect("paraphrase should match");
+        assert!(canon::get(&hit, "similarity").and_then(canon::as_f64).unwrap() >= 0.55);
+        for other in ["fix the login timeout in the auth module", "add a report of sales by region", "remove the threshold check from the store"] {
+            assert!(store.best_recipe(other, 0.55).is_none(), "{other}");
+        }
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
