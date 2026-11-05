@@ -2,7 +2,7 @@
 //! language gets a preflight, then the test command runs with a timeout.
 
 use crate::json::Value;
-use crate::lang::code::bracket_errors;
+use crate::lang::brackets::bracket_errors;
 use crate::walk::is_ignored_dir;
 use std::fs;
 use std::io::Read;
@@ -24,6 +24,19 @@ pub struct VerifyRequest {
 pub fn verify(request: &VerifyRequest) -> Value {
     let static_analysis = static_analysis(&request.edits);
     let preflight = preflight(&request.edits);
+    // An edit with unbalanced brackets cannot pass. Say so now instead of
+    // copying the project and running tests that may not even import it.
+    if crate::canon::get(&preflight, "ok").and_then(crate::canon::as_bool) == Some(false) {
+        return crate::canon::obj(vec![
+            ("success", Value::Bool(false)),
+            ("score", Value::Float(0.0)),
+            ("output", Value::string("")),
+            ("trace", Value::string("preflight failed; tests were not run. Fix the issues in preflight.issues and verify again.")),
+            ("truncated", Value::Bool(false)),
+            ("static_analysis", static_analysis),
+            ("preflight", preflight),
+        ]);
+    }
     if request.test_cmd.is_empty() {
         return crate::canon::obj(vec![
             ("success", Value::Bool(false)),
@@ -180,11 +193,7 @@ fn preflight(edits: &[(String, String)]) -> Value {
     let mut issues = Vec::new();
     for (path, content) in edits {
         let ext = path.rsplit('.').next().unwrap_or("");
-        let tree = crate::syntax::parse(ext, content);
-        if tree.render(content) != *content {
-            issues.push(format!("{path}: parser did not round-trip"));
-        }
-        for err in bracket_errors(content) {
+        for err in bracket_errors(ext, content) {
             issues.push(format!("{path}: {err}"));
         }
     }
@@ -250,6 +259,21 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_preflight_failure_is_not_a_success() {
+        let dir = scratch("preflight");
+        std::fs::write(dir.join("ok.py"), "x = 1\n").unwrap();
+        let broken = vec![("ok.py".to_string(), "def f(:\n    pass\n".to_string())];
+        let verdict = verify(&VerifyRequest { edits: broken, root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
+        assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(false), "{}", crate::canon::stable(&verdict));
+        assert!(crate::canon::stable(crate::canon::get(&verdict, "preflight").unwrap()).contains("ok.py: line 1: '(' is never closed"));
+        // The same command passes once the edit is fixed.
+        let fixed = vec![("ok.py".to_string(), "def f():\n    pass\n".to_string())];
+        let verdict = verify(&VerifyRequest { edits: fixed, root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
+        assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(true), "{}", crate::canon::stable(&verdict));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

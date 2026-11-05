@@ -10,6 +10,9 @@ The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 de
 - The 15-file cap keeps the files most relevant to the goal. `.claude` is ignored. Steps no longer depend on themselves.
 - `get_plan` and `resume` no longer repeat every step inside `strategy` (about half the bytes). `start_plan` with `summary_only` still saves every step.
 - `doctor` no longer prints `schema_version` twice.
+- `initialize` echoes `2025-03-26` and `2024-11-05` as well, so older SDK clients connect.
+- `verify_step` preflight is language-aware (no false alarms on 1,242 real files) and a failed preflight is `success: false`, without running tests. Large non-Python files preflight in linear time.
+- `available_steps` only offers steps whose dependencies are passed or skipped.
 - The repo checks are std-only Rust (`cargo run --example ...`), replacing `scripts/*.py`.
 
 See MIGRATION.md for details.
