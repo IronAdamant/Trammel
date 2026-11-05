@@ -27,6 +27,8 @@ const PLAN: &[Param] = &[
     ("suppress_creation_hints", "boolean", false, "Omit creation_hints from the result."),
 ];
 
+const FULL: Param = ("full", "boolean", false, "Return every field (symbols, rationale, dependency graph, analysis details). Default false: a compact reply.");
+
 const PLAN_ID: Param = ("plan_id", "integer", true, "Plan id from start_plan or list_plans.");
 const STEP_ID: Param = ("step_id", "integer", true, "The step's `id` from get_plan or available_steps (not step_index).");
 const AGENT_ID: Param = ("agent_id", "string", true, "Stable name for the calling agent, e.g. its session or role.");
@@ -46,15 +48,15 @@ struct Tool {
 
 const TOOLS: &[Tool] = &[
     Tool { name: "start_plan", description: "Plan a multi-file change and save it. Returns dependency-ordered file steps plus plan_id; later sessions and other agents continue it with get_plan. Same options as decompose.",
-        params: &[("persist", "boolean", false, "Default true. false returns the plan without saving it."), ("strategy", "string", false, "Strategy name to record on the saved plan.")], extra: &[PLAN] },
-    Tool { name: "decompose", description: "Plan a change without saving: files in dependency order, their symbols, goal relevance, and the import graph. Read-only.",
-        params: &[], extra: &[PLAN] },
+        params: &[("persist", "boolean", false, "Default true. false returns the plan without saving it."), ("strategy", "string", false, "Strategy name to record on the saved plan."), FULL], extra: &[PLAN] },
+    Tool { name: "decompose", description: "Plan a change without saving: files in dependency order with goal relevance. Read-only. full: true adds symbols and the import graph.",
+        params: &[FULL], extra: &[PLAN] },
     Tool { name: "explore", description: "Plan a change and return num_beams alternative step orderings (bottom_up, top_down, ...). Read-only.",
         params: &[], extra: &[PLAN] },
     Tool { name: "get_plan", description: "Load a saved plan with its steps, step status, claims and handoff notes. Use it to pick up work another agent or session left.",
-        params: &[PLAN_ID], extra: &[] },
+        params: &[PLAN_ID, FULL], extra: &[] },
     Tool { name: "resume", description: "Same as get_plan: load a saved plan to continue it.",
-        params: &[PLAN_ID], extra: &[] },
+        params: &[PLAN_ID, FULL], extra: &[] },
     Tool { name: "history", description: "Beam outcomes recorded for a plan by the goal command (`trammel GOAL`) or migrated from 3.x: variant, steps completed, success, failure reason.",
         params: &[PLAN_ID], extra: &[] },
     Tool { name: "add_note", description: "Leave a free-text note on a plan for whoever picks it up next: what you did, what is left, what to watch out for. get_plan and resume return the notes.",
@@ -84,7 +86,7 @@ const TOOLS: &[Tool] = &[
     Tool { name: "save_recipe", description: "Save a strategy that worked so get_recipe can return it for similar goals.",
         params: &[("goal", "string", true, "The goal the strategy solved."), ("strategy", "object", false, "The strategy object, e.g. a decompose result."), ("outcome", "boolean", false, "Default true.")], extra: &[] },
     Tool { name: "get_recipe", description: "Return the saved recipe whose goal best matches this one, paraphrases included (similarity at least 0.55), or {recipe: null}.",
-        params: &[("goal", "string", true, "Goal to match.")], extra: &[] },
+        params: &[("goal", "string", true, "Goal to match."), FULL], extra: &[] },
     Tool { name: "list_recipes", description: "List saved recipes, most recently updated first.",
         params: &[("limit", "integer", false, "Default 50.")], extra: &[] },
     Tool { name: "prune_recipes", description: "Delete recipes not updated for max_age_days whose success ratio is below min_success_ratio (or that never succeeded). Returns removed.",

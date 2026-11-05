@@ -68,7 +68,9 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             let id = required_i64(args, "plan_id")?;
             let store = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?;
             let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
-            if name == "history" { Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(store.trajectories(id)))])) } else { Ok(lean_plan(plan)) }
+            if name == "history" { return Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(store.trajectories(id)))])); }
+            let plan = lean_plan(plan);
+            Ok(if wants_full(args) { plan } else { compact_plan(&plan) })
         }
         "list_plans" => {
             if crate::canon::get(args, "db_path").is_some() {
@@ -117,7 +119,7 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
         "get_recipe" => {
             let goal = required_str(args, "goal")?;
             match store.unwrap().best_recipe(&goal, 0.55) {
-                Some(row) => Ok(row),
+                Some(row) => Ok(if wants_full(args) { row } else { compact_recipe(&row) }),
                 None => Ok(crate::canon::obj(vec![("recipe", Value::Null)])),
             }
         }
@@ -245,6 +247,9 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
     if persist { request.summary_only = false; }
     let full = planner::decompose(&request).map_err(|e| Failure::new("decompose_rejected", e, "Name the files to create in the goal (for example src/report.py), or set strict_greenfield to false"))?;
     let strategy = if persist && summary_only { planner::summary(&full) } else { full.clone() };
+    // The reply is compact unless the caller asks for everything; the saved
+    // plan always keeps the full strategy.
+    let strategy = if summary_only || wants_full(args) { strategy } else { compact_strategy(&strategy) };
     if name == "decompose" { return Ok(strategy); }
     if !persist {
         return Ok(crate::canon::obj(vec![("strategy", strategy), ("plan_id", Value::Null), ("persisted", Value::Bool(false)), ("workflow", Value::string("start_plan"))]));
@@ -259,6 +264,63 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
         ("persisted", Value::Bool(true)),
         ("workflow", Value::string("start_plan")),
     ]))
+}
+
+fn wants_full(args: &Value) -> bool {
+    crate::canon::get(args, "full").and_then(crate::canon::as_bool).unwrap_or(false)
+}
+
+const OMITTED: &str = "symbols, rationale, relevance parts, dependency_graph and analysis details; pass full: true for them";
+
+/// Copy only `keys` of an object, in that order, skipping absent and null ones.
+fn pick(value: &Value, keys: &[&str]) -> Value {
+    Value::Object(keys.iter().filter_map(|k| crate::canon::get(value, k).filter(|v| !matches!(v, Value::Null)).map(|v| (k.to_string(), v.clone()))).collect())
+}
+
+fn compact_meta(meta: Option<&Value>) -> Value {
+    meta.map(|m| pick(m, &["language", "scope", "anchors", "files_analyzed", "max_files_truncated"])).unwrap_or(Value::Object(vec![]))
+}
+
+/// The default start_plan / decompose reply: what an agent acts on.
+/// Each step keeps its file, description (which names its main symbols),
+/// dependencies and relevance.
+fn compact_strategy(full: &Value) -> Value {
+    let steps: Vec<Value> = crate::canon::get(full, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
+        .map(|s| pick(s, &["step_index", "file", "description", "depends_on", "relevance"]))
+        .collect();
+    let mut out = pick(full, &["goal", "goal_fingerprint"]);
+    crate::canon::insert(&mut out, "steps", Value::Array(steps));
+    crate::canon::insert(&mut out, "analysis_meta", compact_meta(crate::canon::get(full, "analysis_meta")));
+    if let Some(files) = crate::canon::get(full, "creation_hints").and_then(|h| crate::canon::get(h, "suggested_files")).and_then(crate::canon::as_array) {
+        let paths: Vec<Value> = files.iter().filter_map(|f| crate::canon::get(f, "path").cloned()).collect();
+        if !paths.is_empty() { crate::canon::insert(&mut out, "suggested_files", Value::Array(paths)); }
+    }
+    crate::canon::insert(&mut out, "omitted", Value::string(OMITTED));
+    out
+}
+
+/// The default get_plan / resume reply: plan status, step rows and notes.
+fn compact_plan(plan: &Value) -> Value {
+    let mut out = pick(plan, &["id", "goal", "status", "current_step", "total_steps", "created", "updated"]);
+    let steps: Vec<Value> = crate::canon::get(plan, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
+        .map(|s| pick(s, &["id", "step_index", "file", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at"]))
+        .collect();
+    crate::canon::insert(&mut out, "steps", Value::Array(steps));
+    crate::canon::insert(&mut out, "notes", crate::canon::get(plan, "notes").cloned().unwrap_or(Value::Array(vec![])));
+    crate::canon::insert(&mut out, "analysis_meta", compact_meta(crate::canon::get(plan, "strategy").and_then(|s| crate::canon::get(s, "analysis_meta"))));
+    crate::canon::insert(&mut out, "omitted", Value::string(OMITTED));
+    out
+}
+
+/// The default get_recipe reply: the match and the files its strategy touched.
+fn compact_recipe(row: &Value) -> Value {
+    let mut out = pick(row, &["sig", "pattern", "similarity", "successes", "failures", "updated"]);
+    let files: Vec<Value> = crate::canon::get(row, "strategy").and_then(|s| crate::canon::get(s, "steps")).and_then(crate::canon::as_array).unwrap_or(&[]).iter()
+        .filter_map(|s| crate::canon::get(s, "file").cloned())
+        .collect();
+    crate::canon::insert(&mut out, "files", Value::Array(files));
+    crate::canon::insert(&mut out, "omitted", Value::string("the stored strategy; pass full: true for it"));
+    out
 }
 
 /// The reply for get_plan and resume. The stored strategy repeats every step
@@ -464,8 +526,43 @@ mod tests {
         // complete_plan still saves the full strategy as the recipe.
         let id = crate::canon::get(&plan, "id").cloned().unwrap();
         call("complete_plan", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("plan_id", id)]), &dir, Some(&store), false).unwrap();
-        let recipe = call("get_recipe", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("goal", Value::string("add stock to Item"))]), &dir, Some(&store), false).unwrap();
+        let recipe = call("get_recipe", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("goal", Value::string("add stock to Item")), ("full", Value::Bool(true))]), &dir, Some(&store), false).unwrap();
         assert_eq!(crate::canon::get(&recipe, "strategy").and_then(|s| crate::canon::get(s, "steps")).and_then(crate::canon::as_array).map(|s| s.len()), Some(2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plan_replies_are_compact_unless_full_is_asked() {
+        let dir = std::env::temp_dir().join(format!("trammel-compact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.py"), "class Item:\n    pass\n").unwrap();
+        std::fs::write(dir.join("store.py"), "from models import Item\n\nclass Store:\n    def add(self):\n        pass\n").unwrap();
+        let store = dir.join(".trammel");
+        let root = ("project_root", Value::string(dir.display().to_string()));
+        let ask = |name: &str, extra: Vec<(&str, Value)>| {
+            let mut fields = vec![root.clone()];
+            fields.extend(extra);
+            call(name, &crate::canon::obj(fields), &dir, Some(&store), false).unwrap()
+        };
+        let compact = ask("start_plan", vec![("goal", Value::string("add stock to Item in store"))]);
+        let text = crate::canon::stable(&compact);
+        assert!(!text.contains("\"symbols\"") && !text.contains("\"dependency_graph\":") && text.contains("\"omitted\""), "{text}");
+        let step = &crate::canon::get(&compact, "strategy").and_then(|s| crate::canon::get(s, "steps")).and_then(crate::canon::as_array).unwrap()[1];
+        assert_eq!(crate::canon::stable(crate::canon::get(step, "depends_on").unwrap()), "[0]");
+        let full = ask("decompose", vec![("goal", Value::string("add stock to Item in store")), ("full", Value::Bool(true))]);
+        assert!(crate::canon::get(&full, "dependency_graph").is_some());
+        assert!(crate::canon::stable(&full).len() > crate::canon::stable(crate::canon::get(&compact, "strategy").unwrap()).len());
+        let id = crate::canon::get(&compact, "plan_id").cloned().unwrap();
+        let plan = ask("get_plan", vec![("plan_id", id.clone())]);
+        assert!(crate::canon::get(&plan, "strategy").is_none() && crate::canon::get(&plan, "notes").is_some());
+        assert!(!crate::canon::stable(&plan).contains("\"symbols\""));
+        let plan_full = ask("get_plan", vec![("plan_id", id.clone()), ("full", Value::Bool(true))]);
+        assert!(crate::canon::get(&plan_full, "strategy").is_some());
+        ask("complete_plan", vec![("plan_id", id)]);
+        let recipe = ask("get_recipe", vec![("goal", Value::string("add stock to Item in store"))]);
+        assert_eq!(crate::canon::stable(crate::canon::get(&recipe, "files").unwrap()), r#"["models.py","store.py"]"#);
+        assert!(crate::canon::get(&recipe, "strategy").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
