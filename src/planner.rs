@@ -221,7 +221,7 @@ pub fn explore(request: &Request) -> Result<Value, String> {
     ]))
 }
 
-fn summary(result: &Value) -> Value {
+pub fn summary(result: &Value) -> Value {
     let steps = canon::get(result, "steps").and_then(canon::as_array).unwrap_or(&[]);
     canon::obj(vec![
         ("goal", canon::get(result, "goal").cloned().unwrap_or(Value::Null)),

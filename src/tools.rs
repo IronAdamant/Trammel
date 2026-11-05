@@ -204,14 +204,18 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
     if name == "explore" {
         return planner::explore(&request).map_err(|e| Failure::new("decompose_rejected", e, "Relax strict_greenfield or pass a scaffold"));
     }
-    let strategy = planner::decompose(&request).map_err(|e| Failure::new("decompose_rejected", e, "Relax strict_greenfield or pass a scaffold"))?;
+    let persist = name == "start_plan" && crate::canon::get(args, "persist").and_then(crate::canon::as_bool).unwrap_or(true);
+    // A saved plan always keeps its steps; summary_only only trims the reply.
+    let summary_only = request.summary_only;
+    if persist { request.summary_only = false; }
+    let full = planner::decompose(&request).map_err(|e| Failure::new("decompose_rejected", e, "Relax strict_greenfield or pass a scaffold"))?;
+    let strategy = if persist && summary_only { planner::summary(&full) } else { full.clone() };
     if name == "decompose" { return Ok(strategy); }
-    let persist = crate::canon::get(args, "persist").and_then(crate::canon::as_bool).unwrap_or(true);
     if !persist {
         return Ok(crate::canon::obj(vec![("strategy", strategy), ("plan_id", Value::Null), ("persisted", Value::Bool(false)), ("workflow", Value::string("start_plan"))]));
     }
     let forced = crate::canon::get(args, "strategy").and_then(crate::canon::as_str).map(|s| s.to_string());
-    let mut stored = strategy.clone();
+    let mut stored = full;
     if let Some(name) = forced { crate::canon::insert(&mut stored, "strategy_name", Value::string(name)); }
     let id = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?.create_plan(&goal, &stored);
     Ok(crate::canon::obj(vec![
@@ -369,6 +373,26 @@ mod tests {
         assert!(!names.contains(&"create_plan"));
         assert_eq!(PRIMARY.len(), 12);
         assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn summary_only_start_plan_still_saves_the_steps() {
+        let dir = std::env::temp_dir().join(format!("trammel-summary-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("models.py"), "class Item:\n    pass\n").unwrap();
+        std::fs::write(dir.join("store.py"), "from models import Item\n\nclass Store:\n    pass\n").unwrap();
+        let store = dir.join(".trammel");
+        let root = ("project_root", Value::string(dir.display().to_string()));
+        let args = crate::canon::obj(vec![root.clone(), ("goal", Value::string("add stock to Item")), ("summary_only", Value::Bool(true))]);
+        let reply = call("start_plan", &args, &dir, Some(&store), false).unwrap();
+        let strategy = crate::canon::get(&reply, "strategy").unwrap();
+        assert!(crate::canon::get(strategy, "steps").is_none(), "the reply stays a summary");
+        assert_eq!(crate::canon::get(strategy, "step_count").and_then(crate::canon::as_i64), Some(2));
+        let id = crate::canon::get(&reply, "plan_id").cloned().unwrap();
+        let plan = call("get_plan", &crate::canon::obj(vec![root, ("plan_id", id)]), &dir, Some(&store), false).unwrap();
+        assert_eq!(crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).map(|s| s.len()), Some(2));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

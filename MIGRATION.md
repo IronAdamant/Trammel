@@ -165,7 +165,7 @@ Arguments below are the ones Python advertises and Rust does not honour, or the 
 
 | Tool | Mark | 4.0.1 behaviour |
 | --- | --- | --- |
-| `start_plan` | Not supported | Decompose, then insert a plan. No duplicate-goal check (Python `create_plan` returned an existing id for the same goal and strategy JSON). `persist=false` returns `plan_id` null. A `strategy` string, when set, is stored as `strategy_name` on the saved copy. |
+| `start_plan` | Not supported | Decompose, then insert a plan. No duplicate-goal check (Python `create_plan` returned an existing id for the same goal and strategy JSON). `persist=false` returns `plan_id` null. With `summary_only`, the reply is the summary but the saved plan keeps every step; it used to save the summary, so the plan had no steps to hand off. A `strategy` string, when set, is stored as `strategy_name` on the saved copy. |
 | `decompose` | Not supported | Fresh analysis only. See Planning for the ignored arguments. Top-level keys on the archetype runs matched Python: `analysis_meta`, `constraints`, `constraints_applied`, `dependency_graph`, `expand_repo`, `goal`, `goal_fingerprint`, `plan_fidelity`, `steps`, `trammel_blind_spots`. |
 | `explore` | Intentional change | Returns `goal`, `strategy`, and `beams`. Beam objects still have `beam_id`, `variant`, `variant_description`, `steps`, `edits`, and `skipped`. There is no second pass with `suppress_creation_hints` when the first decompose fails. |
 | `get_plan` | Intentional change | The plan object plus its `steps`. `strategy` is parsed from the stored JSON string when that parse succeeds. |
