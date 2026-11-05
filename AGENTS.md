@@ -1,28 +1,30 @@
 # Trammel agent guide
 
-Trammel 4.0.1 is one std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch. Do not tag or publish from a task branch.
+Trammel 4.x is one std-only Rust binary (`trammel`, `trammel-mcp`) and the npm package `@iron_adamant/trammel`. `npx -y @iron_adamant/trammel mcp` starts the MCP server. The old Python version lives on the `python-legacy` branch. Do not tag or publish from a task branch.
 
 ## Commands
 
 ```bash
 cargo test
 cargo build --release
-python scripts/bench_gate.py --self-test
-python scripts/check_zero_deps.py
-python scripts/check_no_todos.py
-python scripts/check_syntax_core.py
+cargo run --release --example bench_gate -- --self-test
+cargo run --example check_zero_deps
+cargo run --example check_no_todos
+cargo run --example check_syntax_core
 ```
 
-`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"4.0.1",...}`.
+Those checks are std-only Rust in `examples/`, run from the repo root. No Python is needed to build, test, or check the repo. The migrate tests read `tests/fixtures/trammel-3.15.3.db`, written once by python-legacy's `RecipeStore`.
+
+`trammel doctor` is JSON by default. `--human` prints indented JSON. `--version` prints `{"version":"<Cargo.toml version>",...}`. The version lives only in the manifests (Cargo.toml, Cargo.lock, `npm/*/package.json`, server.json); tests read `CARGO_PKG_VERSION` and fail if a manifest disagrees.
 
 ## Module map
 
-- `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/json.rs`, `src/lang/kind.rs`: stele-context parser core, commit `244561a491ac4002b2c4bc94a3884091870a6d11`. `scripts/syntax_core_manifest.txt` is their digest. The only local change is a newline index in `python_symbols` so line numbers stay identical without scanning the file prefix per identifier. `check_syntax_core.py --against` a stele checkout reports those two files.
+- `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/json.rs`, `src/lang/kind.rs`: stele-context parser core, commit `244561a491ac4002b2c4bc94a3884091870a6d11`. `scripts/syntax_core_manifest.txt` is their digest. The only local change is a newline index in `python_symbols` so line numbers stay identical without scanning the file prefix per identifier. `cargo run --example check_syntax_core -- --against DIR` compares with a stele checkout and stops at the first file that differs (one of those two).
 - `src/lang/code.rs`: lossless lexer for the other languages.
 - `src/lang/symbols.rs`, `src/lang/imports.rs`: hand-written extractors.
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs`: decompose and the nine beams. Rules are `data/patterns.json`.
 - `src/store.rs`: `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
-- `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces.
+- `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces. `src/catalogue.rs`: tool descriptions and input schemas for `tools/list`.
 - `src/benchstat.rs`: the regression rule.
 
 ## Add a language
@@ -34,7 +36,7 @@ python scripts/check_syntax_core.py
 
 ## MCP
 
-The Rust server advertises **32 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 12. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. New tools need a `schemas/<name>.schema.json` file and a row in `src/tools.rs`.
+The Rust server advertises **33 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 13 (the 3.x twelve plus `add_note`). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
 
 ## Tied implicit edges
 
@@ -52,4 +54,4 @@ The npm wrapper is `@iron_adamant/trammel` (`npm i -g @iron_adamant/trammel`, `n
 
 ## Benchmarks
 
-A PR is slower only when both are true: the 95% median intervals do not overlap in the slow direction, and the Holm-adjusted one-sided Mann-Whitney p is below 0.05. There is no percentage tolerance. `benchstat` tests cover an A/A run (must pass) and an injected slowdown (must fail). Rust medians must also stay under the recorded Python floors in `scripts/bench_gate.py`.
+A PR is slower only when both are true: the 95% median intervals do not overlap in the slow direction, and the Holm-adjusted one-sided Mann-Whitney p is below 0.05. There is no percentage tolerance. `benchstat` tests cover an A/A run (must pass) and an injected slowdown (must fail). Rust medians must also stay under the recorded Python floors in `examples/bench_gate.rs`.

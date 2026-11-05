@@ -18,6 +18,17 @@ The old Python package lives on the `python-legacy` branch. Entries below 4.0.0 
 
 ---
 
+## Windows verification, agent-facing MCP fixes, Rust repo checks
+
+**Date:** 2026-11-05
+
+- Built and tested on Windows 11 (GNU toolchain 1.99.1). Fixed: the migrate test and `verify_step` assumed `python3` (the Store stub on Windows), `.cmd` shims and `true` did not start, test output was read after exit (stall on large logs), and concurrent verifies shared one temp dir.
+- `tools/list` now carries real input schemas and descriptions (`src/catalogue.rs`). List results arrive as `{"items": [...]}`; the MCP TypeScript SDK rejected bare arrays. `verify_plan` no longer panics. Step-id errors say to use `id`, not `step_index`.
+- The 15-file cap keeps the most goal-relevant files. `.claude` is ignored. `get_plan` no longer repeats every step. `start_plan` with `summary_only` saves the full plan.
+- `scripts/*.py` checks are now std-only Rust examples with the same messages and exit codes, compared side by side on passing and planted-failure trees. CI runs them with `cargo run --example`.
+
+---
+
 ## 4.0.1 MCP Registry manifest
 
 **Date:** 2026-11-04

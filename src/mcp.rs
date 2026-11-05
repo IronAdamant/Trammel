@@ -8,7 +8,12 @@ use crate::tools;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
-const PROTOCOLS: &[&str] = &["2026-07-28", "2025-11-25", "2025-06-18"];
+/// Every published MCP revision this server answers. `initialize` echoes the
+/// client's version when it is listed here; the tool calls it uses mean the
+/// same thing in all of them (fields a revision lacks are ignored by clients).
+pub const PROTOCOLS: &[&str] = &["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+const INSTRUCTIONS: &str = "Trammel plans multi-file changes in dependency order and keeps plans, constraints, failures and recipes in .trammel/ so later sessions and other agents can pick work up. Loop: get_constraints and get_recipe, start_plan, then per step verify_step (tests run on a temporary copy), then complete_plan. To hand off, add_note what you did and what is left; the next agent calls get_plan with the plan_id and reads the notes. TRAMMEL_MCP_SURFACE=all adds claim_step, available_steps and record_steps for several agents on one plan.";
 
 pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     let stdin = io::stdin();
@@ -48,7 +53,7 @@ fn initialize(params: &Value) -> Value {
         ("protocolVersion", Value::string(version)),
         ("capabilities", crate::canon::obj(vec![("tools", crate::canon::obj(vec![("listChanged", Value::Bool(false))]))])),
         ("serverInfo", server_info()),
-        ("instructions", Value::string("JSON in, JSON out. Primary tools are the default surface. Set TRAMMEL_MCP_SURFACE=all for the rest.")),
+        ("instructions", Value::string(INSTRUCTIONS)),
     ])
 }
 
@@ -70,16 +75,11 @@ fn catalogue(surface: &str) -> Vec<Value> {
 }
 
 fn tool_schema(name: &str) -> Value {
-    let (read_only, destructive) = hints(name);
+    let (read_only, destructive, _, _) = tools::hints(name);
     crate::canon::obj(vec![
         ("name", Value::string(name)),
-        ("description", Value::string(describe(name))),
-        ("inputSchema", crate::canon::obj(vec![
-            ("type", Value::string("object")),
-            ("properties", Value::Object(vec![])),
-            ("additionalProperties", Value::Bool(true)),
-        ])),
-        ("outputSchema", crate::canon::obj(vec![("type", Value::string("object"))])),
+        ("description", Value::string(crate::catalogue::description(name))),
+        ("inputSchema", crate::catalogue::input_schema(name)),
         ("annotations", crate::canon::obj(vec![
             ("readOnlyHint", Value::Bool(read_only)),
             ("destructiveHint", Value::Bool(destructive)),
@@ -87,23 +87,6 @@ fn tool_schema(name: &str) -> Value {
             ("openWorldHint", Value::Bool(false)),
         ])),
     ])
-}
-
-fn hints(name: &str) -> (bool, bool) {
-    let read_only = matches!(name, "decompose" | "explore" | "get_plan" | "resume" | "get_recipe" | "list_recipes" | "list_strategies" | "get_constraints" | "status" | "estimate" | "usage_stats" | "history" | "list_plans" | "failure_history" | "available_steps" | "export_plan");
-    (read_only, !read_only)
-}
-
-fn describe(name: &str) -> String {
-    match name {
-        "start_plan" => "Decompose a goal and persist the plan".into(),
-        "decompose" => "Decompose a goal into ordered steps".into(),
-        "explore" => "Decompose and return beam summaries".into(),
-        "verify_step" => "Copy the project, apply edits, preflight, and run tests".into(),
-        "verify_plan" => "Verify a plan's steps in order and stop at the first failure".into(),
-        "get_recipe" => "Retrieve the closest saved recipe for a goal".into(),
-        other => other.replace('_', " "),
-    }
 }
 
 fn tool_call(params: &Value, store: Option<&std::path::Path>, telemetry: bool) -> Value {
@@ -118,7 +101,13 @@ fn tool_call(params: &Value, store: Option<&std::path::Path>, telemetry: bool) -
 
 fn path_buf_from(path: &str) -> std::path::PathBuf { std::path::PathBuf::from(path) }
 
-fn content(value: Value, is_error: bool) -> Value {
+/// MCP requires `structuredContent` to be an object, and SDK clients reject a
+/// bare array, so list results travel as `{"items": [...]}`.
+pub fn content(value: Value, is_error: bool) -> Value {
+    let value = match value {
+        Value::Object(_) => value,
+        other => crate::canon::obj(vec![("items", other)]),
+    };
     let text = stable(&value);
     crate::canon::obj(vec![
         ("content", Value::Array(vec![crate::canon::obj(vec![("type", Value::string("text")), ("text", Value::string(text))])])),

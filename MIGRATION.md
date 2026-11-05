@@ -1,6 +1,6 @@
 # Migrating from the Python version
 
-Trammel 3.15.3 is the last Python release. The package is `trammel` on PyPI (`pip install trammel`, and `pip install trammel[mcp]` for the stdio server). Version 4.0.1 is a std-only Rust binary. The commands are still `trammel` and `trammel-mcp`.
+Trammel 3.15.3 is the last Python release. The package is `trammel` on PyPI (`pip install trammel`, and `pip install trammel[mcp]` for the stdio server). Version 4.x is a std-only Rust binary. The commands are still `trammel` and `trammel-mcp`.
 
 The Python package, its unittest suite, `pyproject.toml`, and the PyPI workflow stay on the `python-legacy` branch. That branch is commit `dc7deb335e91e5a29541733a234dfc1ed24788a3`, the tip of `main` before pull request #7 removed the package. Nothing on `python-legacy` was rewritten for this note.
 
@@ -33,13 +33,13 @@ Each difference below has one mark:
 
 - **Intentional change.** A 4.x document or the rewrite pull request describes the new behaviour, or the Rust source states it as the replacement.
 - **Bug fixed from Python.** The 3.x result depended on something 4.x removed on purpose, and the parity notes call the new result the stable one.
-- **Not supported.** 4.0.1 does not do the 3.15.3 thing. Pull request #2 does not call the drop a planned cut. These rows are the ones to review. This pass did not change the code.
+- **Not supported.** 4.x does not do the 3.15.3 thing. Pull request #2 does not call the drop a planned cut. These rows are the ones to review. This pass did not change the code.
 
 ## What stays the same
 
 Checked by reading both trees, and by running the checks in the last section where a run is named.
 
-- The 12 primary tool names match: `start_plan`, `decompose`, `get_plan`, `complete_plan`, `verify_step`, `get_recipe`, `save_recipe`, `status`, `resume`, `export_plan`, `get_constraints`, `add_constraint`. `TRAMMEL_MCP_SURFACE=all` still lists the rest. The default listing is the primary 12.
+- The 12 primary tool names of 3.x are still primary (4.x adds `add_note`): `start_plan`, `decompose`, `get_plan`, `complete_plan`, `verify_step`, `get_recipe`, `save_recipe`, `status`, `resume`, `export_plan`, `get_constraints`, `add_constraint`. `TRAMMEL_MCP_SURFACE=all` still lists the rest. The default listing is the primary 12.
 - The nine beam names and descriptions match `trammel/strategies.py` and `src/strategies.rs`: `bottom_up`, `top_down`, `risk_first`, `critical_path`, `cohesion`, `minimal_change`, `leaf_first`, `hub_first`, `test_adjacent`.
 - The beam count cap is the same formula: at least 3, at most 12, and at most the CPU count.
 - The language names match `trammel/tool_schemas.py` `LANGUAGES` and `src/lang/analyze.rs` `LANGUAGES`: Python, TypeScript, JavaScript, Go, Rust, C, C++, Java, Kotlin, C#, Ruby, PHP, Swift, Dart, Zig. `c` and `cpp` share one extension list. `java` and `kotlin` share one extension list.
@@ -48,14 +48,14 @@ Checked by reading both trees, and by running the checks in the last section whe
 - `export_plan` still writes `format` `trammel.plan` and `format_version` 1. Some fields in that document are empty. See Tools.
 - A step claim still expires after 600 seconds (10 minutes).
 - `get_recipe` still uses a minimum similarity of 0.55. The text blend is the same weights as `trammel/text_similarity.py`: 0.3 trigram cosine, 0.4 word Jaccard, 0.3 substring, after the same verb synonyms. 4.x does not add the later file, success, and recency terms. See Tools.
-- Ignored directory names match `trammel/utils.py` `_IGNORED_DIRS`, including the `*.egg-info` suffix. 4.x also ignores `target`. See Planning.
+- Ignored directory names match `trammel/utils.py` `_IGNORED_DIRS`, including the `*.egg-info` suffix. 4.x also ignores `target` and `.claude` (Claude Code keeps whole-repo agent worktrees under `.claude/worktrees`, which planning would read and `verify_step` would copy). See Planning.
 - On the five archetype projects, with the flags in the last section, decompose matched on step files, descriptions, symbols, relevance, rationale, goal fingerprint, and the dependency edge set.
 
 ## Install and platforms
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
-| Package | Intentional change | PyPI `trammel`, Python `>=3.10`. Optional extra `mcp>=1.0.0,<3`. | npm `@iron_adamant/trammel` 4.0.1. No Python runtime. No PyPI publish from this tree (`CHANGELOG.md`). |
+| Package | Intentional change | PyPI `trammel`, Python `>=3.10`. Optional extra `mcp>=1.0.0,<3`. | npm `@iron_adamant/trammel` 4.x. No Python runtime. No PyPI publish from this tree (`CHANGELOG.md`). |
 | Server process | Intentional change | `trammel-mcp` imports the `mcp` package. Without it, the script prints an install hint and exits. | The MCP server is inside the binary. `trammel mcp` and `trammel-mcp` both serve stdio. |
 | Platforms | Intentional change | Classifiers say OS independent. The 3.15.3 changelog says CI is Ubuntu and macOS. Windows was left out of that matrix. | Release binaries: Linux musl x64 and arm64, macOS x64 and arm64, Windows x64 and arm64. CI runs `cargo test` on Linux, macOS, and Windows. |
 | Library import | Not supported | `from trammel import Planner` and the other names in `trammel/__init__.py`. | No Python module and no Rust library API for those types. `register_strategy` is not exposed. |
@@ -63,11 +63,11 @@ Checked by reading both trees, and by running the checks in the last section whe
 
 ## Command line
 
-3.15.3 `trammel` only runs a goal (`trammel/cli.py`). 4.0.1 also runs `doctor`, `migrate`, `dump`, `mcp`, and every tool name as a subcommand (`src/cli.rs`).
+3.15.3 `trammel` only runs a goal (`trammel/cli.py`). 4.x also runs `doctor`, `migrate`, `dump`, `mcp`, and every tool name as a subcommand (`src/cli.rs`).
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
-| `--version` | Intentional change | argparse text: program name, space, package version. `pyproject.toml` says `3.15.3`. | One JSON object: `name`, `ok`, `schema_version` `4.0.0`, `version` `4.0.1`. `-V` is accepted. |
+| `--version` | Intentional change | argparse text: program name, space, package version. `pyproject.toml` says `3.15.3`. | One JSON object: `name`, `ok`, `schema_version` `4.0.0`, `version` (the crate version). `-V` is accepted. |
 | `--help` | Intentional change | argparse text. | JSON (`ok`, `schema_version`, `usage`, `tools`), pretty-printed. `-h` is accepted. |
 | Goal flags that stay | Intentional change | `--root`, `--beams`, `--test-cmd`, `--language`, `--scope`, `--dry-run`, `--export`. | Same flags. `--beams` is sent as `num_beams`. |
 | `--db` | Intentional change | Path of the SQLite file. Default `trammel.db` in the working directory. | Removed. Use `--store`, or `TRAMMEL_DB_PATH`, for the `.trammel` directory. |
@@ -77,7 +77,7 @@ Checked by reading both trees, and by running the checks in the last section whe
 | Missing project root | Not supported | `Error: project root does not exist` on stderr, exit 1. | No directory check. `trammel "update helper" --root /tmp/no-such-trammel-root --beams 1 --test-cmd true` exited 0 with `ok` true and `success` false. The trace was `No such file or directory (os error 2)`. |
 | `--dry-run` | Intentional change | Calls `explore`. Prints indented JSON `{"strategy", "beams"}`. | Calls the `explore` tool. Prints the envelope. `result` is `goal`, `strategy`, `beams`. Measured on `/tmp/tiny-proj`. |
 | Goal run result | Not supported | `plan_and_execute` returns `status` `ok` or `failed`, plus `plan_id`. On success it also returns `strategy`, `outcome`, and `beam`, and it saves a recipe. | `result` is `goal`, `strategy`, `beams` (a count), `success`, `outcomes`. Measured with `--test-cmd true` on `/tmp/tiny-proj`: Python `status` `ok`, `plan_id` 1. Rust `success` true, `beams` 1, no `plan_id` in the JSON. |
-| Goal run test command | Not supported | `resolve_test_cmd`: explicit `--test-cmd`, then project config, then the detected language. | `src/planner.rs` `plan_and_execute` uses `--test-cmd` when set. Otherwise it calls `test_cmd` for `--language`, or for `python` when `--language` is omitted. It does not read `.trammel.json`. A Go file at `/tmp/goproj/main.go`, goal `update main`, no `--language`, produced a Python `unittest` trace (`Ran 0 tests`). |
+| Goal run test command | Bug fixed | `resolve_test_cmd`: explicit `--test-cmd`, then project config, then the detected language. | Same order (`analyze::default_test_cmd`, shared with `verify_step`). 4.0.1 skipped `.trammel.json` and fell back to Python: a Go project ran a Python `unittest` (`Ran 0 tests`). |
 | Goal run edits | Not supported | Each beam's `edits` are passed to the harness. Those edits are `step_index`, `path`, and `task`, with no `content`, so the harness does not write files. The plan is then `completed` or `failed`, and a passing run saves a recipe. | Each beam is verified with an empty edit list (`src/planner.rs`). The plan row is set to `running` and that function does not set `completed` or `failed`, and it does not save a recipe. |
 | `--export` on the goal CLI | Not supported | Writes a `trammel.plan` document from the strategy (`trammel/export.py`). | Writes the pretty-printed tool result (`src/cli.rs`). That is not the `trammel.plan` document. The `export_plan` tool still writes `trammel.plan`. |
 | `doctor`, `dump`, `migrate`, `mcp` | Intentional change | Not subcommands of `trammel`. The server is only `trammel-mcp`. | `trammel doctor` prints version, store path, languages, protocols, and next steps. `trammel dump` prints store rows. `trammel migrate` copies a SQLite file. `trammel mcp` serves stdio (pull request #8). |
@@ -87,26 +87,27 @@ Checked by reading both trees, and by running the checks in the last section whe
 
 `docs/LLM_CONTRACT.md` is the 4.x contract. `schema_version` there is the string `4.0.0`. The store file uses a different integer `schema_version` (1). They are not the same field.
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
 | Success shape | Intentional change | The handler object, indented, insertion order. CLI exit 0. | `{"ok":true,"schema_version":"4.0.0", ...}` with sorted keys, one line. CLI adds `result` or `tool` plus `result`. |
 | Failure shape | Intentional change | CLI: `Error: ...` on stderr, exit 1 or 2. MCP tool failure: text `Error: ...`, `isError` true (3.15.3). | CLI: the failure object on stderr, exit 1, or exit 2 when `code` is `usage`. `--human` prints `message` only. MCP: the same object in `structuredContent`, `isError` true. |
 | `decompose` rejection | Not supported | `mcp_server.py` catches `ValueError` and returns `{"error":"decompose_rejected","message":...}` as a normal tool result. | `code` `decompose_rejected`, `isError` true. |
-| Codes this tree returns | Intentional change | Python exceptions and the `error` string above. | `usage`, `tool_removed`, `unknown_tool`, `unknown_argument`, `missing_argument`, `plan_not_found`, `not_found`, `legacy_sqlite`, `decompose_rejected`, `claim_held`, `claim_mismatch`, `store`, `migrate`, `export`, `stdin`, `mcp`, `run`. `hint` and `retryable` are always present. `retryable` is false in `src/contract.rs`. |
+| Codes this tree returns | Intentional change | Python exceptions and the `error` string above. | `usage`, `tool_removed`, `unknown_tool`, `unknown_argument`, `missing_argument`, `plan_not_found`, `not_found`, `legacy_sqlite`, `decompose_rejected`, `claim_held`, `claim_mismatch`, `step_not_found`, `step_blocked`, `store`, `migrate`, `export`, `stdin`, `mcp`, `run`. `hint` and `retryable` are always present. `retryable` is false in `src/contract.rs`. |
 
 ## MCP
 
-A 4.x `initialize` for protocol `2025-06-18` returned `protocolVersion` `2025-06-18`, `serverInfo.name` `trammel`, `serverInfo.version` `4.0.1`. An unknown protocol version (`1999-01-01`) came back as `2025-11-25`. `server/discover` returned protocol `2026-07-28`. This pass did not start the Python `mcp` server, so it does not compare SDK handshake bytes. `trammel/mcp_stdio.py` does not implement `server/discover`.
+A 4.x `initialize` for protocol `2025-06-18` returned `protocolVersion` `2025-06-18`, `serverInfo.name` `trammel`, `serverInfo.version` the crate version. An unknown protocol version (`1999-01-01`) came back as `2025-11-25`. `2025-03-26` and `2024-11-05` are echoed back too; before, they got `2025-11-25` and older SDK clients (MCP TypeScript SDK 1.12, which asks for `2025-03-26`) disconnected. `server/discover` returned protocol `2026-07-28`. This pass did not start the Python `mcp` server, so it does not compare SDK handshake bytes. `trammel/mcp_stdio.py` does not implement `server/discover`.
 
-| Item | Mark | 3.15.3 | 4.0.1 |
+| Item | Mark | 3.15.3 | 4.x |
 | --- | --- | --- | --- |
-| Tool count | Intentional change | 33 tools in `TOOL_SCHEMAS`. | 32 names from `tools::all_names`. `verify_plan` is included. |
+| Tool count | Intentional change | 33 tools in `TOOL_SCHEMAS`. | 33 names from `tools::all_names`: `verify_plan` and `add_note` are new, `record_step` and `create_plan` are gone. Primary surface is 13: the 3.x twelve plus `add_note`. |
 | Removed names | Intentional change | `create_plan` and `record_step` dispatch. | Both return `code` `tool_removed`. Measured: `create_plan` says `Call start_plan instead`. `record_step` says `Call record_steps instead`. Exit 1. |
 | Added name | Intentional change | No `verify_plan`. | `verify_plan` runs `verify_step` for each plan step that has both `file` and `content`, and stops at the first failure (`src/tools.rs`). |
-| `tools/list` schema | Intentional change | Full JSON Schema: properties, types, `required`, enums (`trammel/tool_schemas.py`). | Measured primary list: 12 tools. Each `inputSchema` is `{"type":"object","properties":{},"additionalProperties":true}`. Also `outputSchema` and `annotations` (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). The files in `schemas/` are result envelopes, not the 3.x argument lists. Handlers still read the arguments named in the tool tables below. |
-| Surface aliases | Not supported | `all`, `full`, `advanced`, and `*` list every tool. | Measured: `all` lists 32, `advanced` lists 12. `src/mcp.rs` treats `all` and `full` as the full list. Any other value, including `advanced` and `*`, stays on the primary 12. |
+| `tools/list` schema | Intentional change | Full JSON Schema: properties, types, `required`, enums (`trammel/tool_schemas.py`). | Each tool has a one-line description and an `inputSchema` with the arguments its handler reads: types, `required`, and enums (`src/catalogue.rs`). Arguments Rust ignores are not listed. A test calls every tool with no arguments and checks that the arguments it asks for are exactly `required`. Measured on Windows: primary list 10,137 bytes, all 22,256 bytes (Python primary was 12,508). No `outputSchema`. `annotations` has `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. The files in `schemas/` are result envelopes. |
+| `structuredContent` | Intentional change | The handler value. | Always an object, as MCP requires. A tool that returns a list (`list_plans`, `list_recipes`, `list_strategies`, `get_constraints`, `failure_history`, `available_steps`) sends `{"items": [...]}`. Before this, the MCP TypeScript SDK client rejected those results (`Expected object, received array`). The CLI result is unchanged. |
+| Surface aliases | Not supported | `all`, `full`, `advanced`, and `*` list every tool. | `all` lists 33, `advanced` lists the primary 13. `src/mcp.rs` treats `all` and `full` as the full list. Any other value, including `advanced` and `*`, stays on the primary 12. |
 | Tool text | Intentional change | `json.dumps(result, indent=2)`. | Compact sorted JSON. Success text is the handler value. Failure text is the failure object. |
-| Protocol list | Intentional change | Whatever the installed `mcp` package negotiates. | `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`. |
+| Protocol list | Intentional change | Whatever the installed `mcp` package negotiates. | `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`. `initialize` echoes a listed version and answers anything else with `2025-11-25`. |
 
 ## Planning
 
@@ -130,7 +131,9 @@ This pass ran that comparison with `PYTHONPATH` pointed at `trammel/` from `pyth
 | Symbol order outside the archetypes | Not supported | Pull request #2 says symbol order on other trees can differ from CPython `ast.walk`, because the vendored extractor walks in its own order. This pass did not re-run rich or flask. The five archetypes matched, including `symbols`. |
 | Paths | Intentional change | `src/walk.rs` writes relative paths with `/` on every OS. The parity script says Python on Windows emits backslashes and compares both sides with `/`. This pass ran on Linux only. |
 | `target` directories | Intentional change | `src/walk.rs` ignores `target` as well as the Python ignore list, so a Rust build directory is not scanned. |
-| 15-file cap | Intentional change | With no scaffold, Python `core.py` caps a full-repo decompose at 15 files. Rust does the same when `expand_repo` is true (the default), including when `max_files` is higher than 15 (`src/planner.rs`). `test_farm` has 14 steps, so the cap did not drop a step. `plan_fidelity.max_files_cap` was 15. |
+| Goal command | Intentional change | `trammel GOAL` writes to `.trammel/` like 3.x did: a plan (status `running`, then `completed` or `failed`), one trajectory per beam, and a recipe when every beam passes. 4.0.1 created the plan only when `--store` was set and left it `running`. The result has `plan_id`. `--dry-run` still writes nothing. |
+| Self-dependency | Bug fixed | A naming-convention rule could infer a file depending on itself (`store.py` for the `store` suffix), so a step listed its own index in `depends_on`. Inferred edges to the source file are skipped. The five archetype goldens had no such edge. |
+| 15-file cap | Intentional change | With no scaffold, Python `core.py` caps a full-repo decompose at 15 files. Rust does the same when `expand_repo` is true (the default), including when `max_files` is higher than 15 (`src/planner.rs`). Python kept the first 15 files in dependency order, which on a large repo is close to alphabetical and often left out every file the goal names. Rust keeps the 15 files with the highest step relevance for the goal, in dependency order, and falls back to the first 15 when the goal has no keywords. `test_farm` has 14 steps, so the cap did not drop a step and the golden is unchanged. `plan_fidelity.max_files_cap` was 15. |
 | `expand_repo=false` | Not supported | Python returns scaffold-only steps, or an `empty_scaffold` error when there is no scaffold. Rust has no scaffold argument. `expand_repo=false` only turns the 15-file cap off. On `test_farm` both runs still returned 14 steps. Rust `max_files_cap` was null. |
 | `scaffold` | Not supported | Python `decompose` and `start_plan` take a scaffold and can plan from it. `src/tools.rs` `plan_tool` does not read `scaffold`. `Request` has no scaffold field. |
 | `skip_recipes` | Not supported | The argument is not read. `decompose` does not open the store, so it never returns a cached recipe. That is the same path as Python `skip_recipes=True`, which is what the parity harness compares. Automatic recipe reuse during decompose is absent. |
@@ -147,12 +150,12 @@ This pass ran that comparison with `PYTHONPATH` pointed at `trammel/` from `pyth
 
 4.x stores a JSON snapshot at `.trammel/store`, an append journal at `.trammel/journal`, and a lock file at `.trammel/lock`. A new store's arrays are `plans`, `steps`, `constraints`, `recipes`, `failures`, `usage_events`, and `trajectories` (`src/store.rs`).
 
-`trammel migrate` copies every non-`sqlite_` table into that JSON document. The source file stays. Measured on a database written with Python's `sqlite3`: `migrated_from`, `plans` 1, `recipes` 1, `source_untouched` true, and the `.db` file still present.
+`trammel migrate` copies every non-`sqlite_` table into that JSON document. The source file stays. `tests/fixtures/trammel-3.15.3.db` is a real 3.15.3 store written by python-legacy's `RecipeStore` (a recipe, a plan with two steps, a constraint, two trajectories); the migrate tests read it, so they need no Python. After a migrate, new rows get ids after the migrated ones (4.0.1 restarted every counter at 1 and reused ids).
 
 | Item | Mark | Detail |
 | --- | --- | --- |
 | File location | Intentional change | `.trammel/` next to the project root (`find_root` walks up to `.git` or `.trammel.json`). A leftover `trammel.db` makes most tools return `code` `legacy_sqlite` until `migrate`, unless `.trammel/store` already exists. `status`, `estimate`, and `list_strategies` are exempt (`src/tools.rs`). |
-| Integer primary keys | Not supported | SQLite stores an `INTEGER PRIMARY KEY` as the rowid. `src/migrate.rs` drops the rowid. On the sample database, the imported plan, step, and `failure_patterns` row had `"id": null`. `plan_id` on the step stayed 1, because that column is not the primary key. `get_plan` looks up `id`, so that imported plan cannot be opened by id. A text primary key is kept: the imported recipe `sig` `abc` was returned by `get_recipe` for `update helper` with `similarity` 1. The unit test `reads_a_python_sqlite_database` only inserts a text primary key. |
+| Integer primary keys | Bug fixed | SQLite stores an `INTEGER PRIMARY KEY` in the rowid and NULL in the record. 4.0.1 dropped the rowid, so imported plans, steps and constraints had `"id": null` and `get_plan` could not open them. `src/migrate.rs` now puts the rowid into that column and keeps rows in rowid order. On the 3.15.3 fixture, `get_plan` with `plan_id` 1 returns the plan and its two steps, and `history` its two trajectories. |
 | `failure_patterns` | Not supported | The importer keeps the table name `failure_patterns`. `failure_history` reads the array `failures`. After migrate, `failure_history` returned `[]` while `failure_patterns` held the SyntaxError row. |
 | New ids after migrate | Not supported | `next_plan` starts at 1 when the imported document has no `next_plan`. The sample's new `start_plan` was `plan_id` 1, the same number as the step's `plan_id`, while the imported plan's own `id` was null. |
 | `active` on constraints | Intentional change | Python stores `active` as an integer. `as_bool` accepts only JSON booleans. A non-boolean `active` is treated as active (`unwrap_or(true)` in `constraints`). |
@@ -162,34 +165,52 @@ This pass ran that comparison with `PYTHONPATH` pointed at `trammel/` from `pyth
 
 Arguments below are the ones Python advertises and Rust does not honour, or the result fields that changed. Tools not listed still accept the arguments `src/tools.rs` reads (goal, project root, scope, language, plan id, and so on).
 
-| Tool | Mark | 4.0.1 behaviour |
+| Tool | Mark | 4.x behaviour |
 | --- | --- | --- |
-| `start_plan` | Not supported | Decompose, then insert a plan. No duplicate-goal check (Python `create_plan` returned an existing id for the same goal and strategy JSON). `persist=false` returns `plan_id` null. A `strategy` string, when set, is stored as `strategy_name` on the saved copy. |
+| `start_plan` | Not supported | Decompose, then insert a plan. No duplicate-goal check (Python `create_plan` returned an existing id for the same goal and strategy JSON). `persist=false` returns `plan_id` null. With `summary_only`, the reply is the summary but the saved plan keeps every step; it used to save the summary, so the plan had no steps to hand off. A `strategy` string, when set, is stored as `strategy_name` on the saved copy. |
 | `decompose` | Not supported | Fresh analysis only. See Planning for the ignored arguments. Top-level keys on the archetype runs matched Python: `analysis_meta`, `constraints`, `constraints_applied`, `dependency_graph`, `expand_repo`, `goal`, `goal_fingerprint`, `plan_fidelity`, `steps`, `trammel_blind_spots`. |
 | `explore` | Intentional change | Returns `goal`, `strategy`, and `beams`. Beam objects still have `beam_id`, `variant`, `variant_description`, `steps`, `edits`, and `skipped`. There is no second pass with `suppress_creation_hints` when the first decompose fails. |
-| `get_plan` | Intentional change | The plan object plus its `steps`. `strategy` is parsed from the stored JSON string when that parse succeeds. |
-| `resume` | Not supported | Same payload as `get_plan`. Python `get_plan_progress` returns `prior_edits`, remaining steps, and the next index. Measured keys on a migrated plan: `created`, `current_step`, `goal`, `id`, `scaffold`, `status`, `steps`, `strategy`, `total_steps`, `updated`. |
-| `history` | Not supported | Always `{"plan_id": N, "trajectories": []}`, including when the store has a `trajectories` array. Measured on plan 1. Python returns the rows from `trajectories`. The goal command does not write those rows either. |
-| `list_plans` | Intentional change | `db_path` is rejected. Measured: `code` `unknown_argument`, message `list_plans no longer accepts db_path`, hint `Set --store or TRAMMEL_DB_PATH`. |
+| `add_note` | Intentional change | New. `plan_id` and `text`, optional `agent_id` and `step_id`. Returns `note_id`. `get_plan` and `resume` return the plan's `notes`, oldest first. `prune_plans` deletes them with the plan. |
+| `get_plan` | Intentional change | The plan object plus its `steps` and `notes`. The 3.x `scaffold` column (always the text `[]`) is left out. `strategy` is parsed from the stored JSON string when that parse succeeds. The reply leaves out `strategy.steps`, which repeated every step without status or claims and was about half the reply (15,923 to 8,533 bytes on a 15-step plan). Step `depends_on` is an array of step indexes, not JSON text. The stored plan, `export_plan`, and the recipe saved by `complete_plan` still have the full strategy. |
+| `resume` | Not supported | Same payload as `get_plan`, trimmed the same way. Python `get_plan_progress` returns `prior_edits`, remaining steps, and the next index. Measured keys on a migrated plan: `created`, `current_step`, `goal`, `id`, `scaffold`, `status`, `steps`, `strategy`, `total_steps`, `updated`. |
+| `history` | Intentional change | `{"plan_id": N, "trajectories": [...]}` from the store: rows migrated from 3.x, and one row per beam written by the goal command (`trammel GOAL`): `beam_id`, `variant`, `steps_completed`, `success`, `failure_reason` (the first line of the test error). Python stored the whole outcome object. |
+| `list_plans` | Intentional change | Newest first, seven fields per plan (`id`, `goal`, `status`, `current_step`, `total_steps`, `created`, `updated`), as in 3.x; it used to return every stored column, including the whole strategy as JSON text. `db_path` is rejected. Measured: `code` `unknown_argument`, message `list_plans no longer accepts db_path`, hint `Set --store or TRAMMEL_DB_PATH`. |
 | `update_plan_status` | Intentional change | Sets `status` and `updated`. Unknown id is `plan_not_found`. |
 | `complete_plan` | Not supported | Sets the plan to `completed` or `failed` and saves a recipe. It does not mark pending steps, and it ignores `step_status`. Measured: after `complete_plan` with `outcome` true, the plan status was `completed` and the step status was still `pending`. Python defaults `step_status` to `passed`. |
 | `export_plan` | Not supported | `format` `trammel.plan`, `format_version` 1, goal, status, plan id, steps, strategy. `dependency_graph` is `{}`, `scaffold` is null, and `constraints` is `[]` (`src/export.rs`). Step objects keep index, description, rationale, `depends_on`, status, and file. Python also copies symbols, edits, verification, and id when those fields exist. |
-| `verify_step` | Intentional change | Copies the project, applies `edits` (`path` or `file`, plus `content`), runs a preflight, then the test command, with a 60 second cap. `trace` is cut at 4 KB unless `full_output` is true (`docs/LLM_CONTRACT.md`). `prior_edits` is not read. |
-| `verify_plan` | Intentional change | New. See MCP. |
-| `record_steps` | Not supported | Sets `status` on each step id. The return value is `updated` (a count). Edits and verification are not stored. Python returns `ok` and `steps_updated` and stores those JSON columns. |
+| `verify_step` | Intentional change | Copies the project, applies `edits` (`path` or `file`, plus `content`), runs a preflight, then the test command, with a 60 second cap. `trace` is cut at 4 KB unless `full_output` is true (`docs/LLM_CONTRACT.md`). `prior_edits` is not read. On Windows the default Python command is the first real `python3` or `python` on `PATH`, then `py -3`; a Microsoft Store alias is used only when nothing else exists. A bare program name is looked up with `PATHEXT`, so `npm` and `npx` run their `.cmd` shims. Languages without a runner use `true`, or `cmd /C exit 0` on Windows. Output is read while the test runs, so a large test log no longer stalls until the timeout. A timeout sets `trace` to the limit in seconds. The preflight checks bracket balance per language (comments, strings, raw strings, char literals, template and regex literals are skipped; Ruby, PHP and unknown extensions are not checked) and reports `path: line N: ...`. A failed preflight returns `success` false without running the tests; before, it was reported but `success` came from the tests alone. On 1,242 compiling files from eight local projects the old checker flagged hundreds and the new one flags none; with the last closing bracket deleted it caught 852 of 854. The parser round-trip self-check is no longer part of the preflight. |
+| `verify_plan` | Intentional change | New. See MCP. It opens the store like the other plan tools. It used to skip that and panic, which ended the MCP server. |
+| `record_steps` | Not supported | Sets `status` on each step id. The return value is `updated` (a count). Ids that match no step come back in `not_found` with a `hint`. Edits and verification are not stored. Python returns `ok` and `steps_updated` and stores those JSON columns. |
 | `save_recipe` | Not supported | Stores `sig`, `pattern` (goal, at most 400 characters), strategy JSON, success and failure counts, and timestamps. Returns `signature`. `outcome` defaults to true. A `scaffold` argument is not written to a scaffold table. Python returns `{"ok": true}` and can also save a scaffold recipe. |
-| `get_recipe` | Not supported | Text blend only, threshold 0.55. A miss is `{"recipe": null}` (measured). Python returns `match` null and `near_match_recipes`. `context_files`, `include_scaffold`, and `debug` are not read. There is no `match_components` object. |
+| `get_recipe` | Not supported | Threshold 0.55. The score is the higher of the text blend and a concept-term overlap: words split on punctuation and camelCase, stopwords dropped, light stemming, the verb and abbreviation tables plus relation words (under/below), Dice coefficient; a query word that only the recipe's files or symbols contain counts half. A paraphrase such as `report items with low stock under a threshold` now finds `add a low-stock report listing items whose quantity is below a threshold` (text blend alone: under 0.55); unrelated goals in the tests stay under 0.55. A miss is `{"recipe": null}` (measured). Python returns `match` null and `near_match_recipes`. `context_files`, `include_scaffold`, and `debug` are not read. There is no `match_components` object. |
 | `list_recipes` | Not supported | Newest `updated` first. Default `limit` is 50. Python's default is 20, and the list includes file paths from `recipe_files`. |
-| `prune_recipes`, `prune_plans`, `validate_recipes` | Not supported | Each returns `{"removed": 0}` and ignores `max_age_days`, `min_success_ratio`, `status`, and `project_root`. Measured. Python prune returns a real count (`pruned` for plans). |
+| `prune_recipes`, `prune_plans`, `validate_recipes` | Intentional change | Same rules as Python. `prune_recipes` deletes recipes not updated for `max_age_days` (90) whose success ratio is under `min_success_ratio` (0.1) or that never ran. `prune_plans` deletes plans not updated for `max_age_days` (7) with `status` (`pending`; null means any), plus their steps, notes, trajectories and constraints. `validate_recipes` checks each recipe's step files under `project_root` and deletes recipes whose files are all gone; it returns `recipes_checked`, `files_missing`, `removed`. Both prunes return `removed` (Python used `pruned` for plans). Before this, all three returned `removed: 0` and did nothing. |
 | `list_strategies` | Not supported | Nine names and descriptions, with zero success and failure counts. See Planning. |
 | `add_constraint` / `get_constraints` / `deactivate_constraint` | Intentional change | Stored and listed. Types are not checked against the Python enum. Deactivating a missing id is `not_found`. They are not applied during decompose. |
 | `estimate` | Intentional change | `language`, `scope`, `matching_files`, and `recommendation` (`use scope` above 5000 files, otherwise `full analysis OK`). Same threshold as Python. |
-| `status` | Intentional change | `store`, `counts` (plans, steps, recipes, constraints, failures, usage events), `primary_tools`, `advanced_tools`, `tool_surface_default`, `tool_surface_env`. It does not return `tools_by_category`. `SYSTEM_PROMPT.md` still mentions that field. |
+| `status` | Intentional change | `store`, `counts` (plans, steps, recipes, constraints, failures, usage events), `primary_tools`, `advanced_tools`, `tool_surface_default`, `tool_surface_env`. It does not return `tools_by_category`. |
 | `usage_stats` | Not supported | See Storage. |
 | `failure_history` | Not supported | Reads `failures`, default `limit` 50. Python's default is 20 and it reads `failure_patterns` (occurrences, first seen, last seen). `resolve_failure` inserts a new `failures` row. It does not update a pattern, and it does not move a step out of `running` or release a claim. Python's 3.12.2 `plan_id` / `step_id` behaviour did that. |
-| `claim_step` / `release_step` | Intentional change | Claim sets `claimed_by`, `claimed_at`, and status `running`. A live claim by someone else is `claim_held`. Release by another agent is `claim_mismatch`. Python `claim_step` can also return a proximity warning when another plan touches the same file. That warning is not built here. |
-| `available_steps` | Not supported | Returns pending or running steps for the plan that are not held by another agent inside 600 seconds. It does not require `depends_on` to be satisfied. Python `get_available_steps` does, and it only returns `pending` steps. |
+| `claim_step` / `release_step` | Intentional change | Claim sets `claimed_by`, `claimed_at`, and status `running`. A live claim by someone else is `claim_held`. Release by another agent is `claim_mismatch`. A `step_id` that is not a step `id` (often a `step_index`) is `step_not_found`, with a hint saying so. A step whose `depends_on` steps are not passed, skipped, completed or done is `step_blocked`; the message and hint name the blocking step ids and point to `available_steps`. Python only checked dependencies in `get_available_steps`. Python `claim_step` can also return a proximity warning when another plan touches the same file. That warning is not built here. |
+| `available_steps` | Intentional change | Returns pending or running steps for the plan that are not held by another agent inside 600 seconds and whose `depends_on` steps are all `passed`, `skipped`, `completed` or `done`. Python `get_available_steps` also required dependencies, and it only returned `pending` steps. |
 | `merge_plans` | Not supported | `interleave` alternates steps. Any other `strategy` value, including `priority` and `unified`, appends the second plan's steps. The new plan's goal is the two goals joined with ` + `. The result is `plan_id` and `strategy`. There is no conflict report and no cycle check. |
+
+## Repo checks
+
+`scripts/*.py` became std-only Rust examples (`cargo run --example check_zero_deps`, `check_no_todos`, `check_syntax_core`, `bench_gate`). Checks, pass/fail decisions, results and exit codes match the scripts, compared side by side on 23 passing and planted-failure trees. Error text that was Python's own is now a Rust message that says what to do:
+
+| Case | Python script | Rust example |
+| --- | --- | --- |
+| Missing `Cargo.lock`, `Cargo.toml` or manifest | `FileNotFoundError: [Errno 2] ...` traceback | `<path> not found; run the check from the repo root` |
+| Manifest line without a path | `ValueError: not enough values to unpack` traceback | `scripts/syntax_core_manifest.txt line N: expected "<sha256>  <path>"` |
+| `--against` checkout missing a file | `FileNotFoundError` traceback | `<dir> has no <path>; pass the root of a stele-context checkout` |
+| ok line count | Counted every manifest line, blank ones included | Counts entries |
+| `bench_gate` with no argument | `IndexError: list index out of range`, exit 1 | A usage line, exit 2 |
+| Timed binary exits with another code | `['<path>', '--version'] exited 3` | `<path> --version exited with status 3; it must exit 0 (or 2 for usage)` |
+| `--self-test` fails | `subprocess.CalledProcessError: Command '[...]' returned non-zero exit status 101.` | `` `cargo test ...` failed with exit status 101; the benchstat tests above say which `` |
+| `--self-test` without cargo | `FileNotFoundError: [WinError 2] ...` | `cargo not found on PATH; install Rust or fix PATH` |
+
+Also from 3.x wording: `strict_greenfield` rejections no longer mention a scaffold or recipe (4.x has no scaffold argument). The message is `the goal asks to create files but names no file path, and strict_greenfield is set`; the hint says to name the files in the goal or set `strict_greenfield` to false.
 
 ## Checked on 2026-11-04
 
@@ -199,4 +220,4 @@ Arguments below are the ones Python advertises and Rust does not honour, or the 
 - Built `target/debug/trammel` and `target/debug/trammel-mcp` from this tree (rustc 1.99.1). Python was the `python-legacy` package on `PYTHONPATH`, not a PyPI install. `python3 -m trammel --version` printed `__main__.py dev` because the distribution metadata was not installed. The source version in that `pyproject.toml` is 3.15.3.
 - Decompose comparison above, plus the CLI, migrate, MCP, and tool calls named in the tables. Host: Linux. Windows path behaviour is from the source comments, not from a Windows run.
 
-`SYSTEM_PROMPT.md` still tells a client to pass `scaffold`, `skip_recipes`, `prior_edits`, and `include_scaffold`, and it still says decompose applies constraints, `resume` returns `prior_edits`, and `history` returns beam outcomes. Those sentences describe 3.15.3. The rows in this file are what 4.0.1 does.
+`SYSTEM_PROMPT.md` describes the 4.x tools and arguments; its tool reference is generated from `tools/list`.

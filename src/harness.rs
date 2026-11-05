@@ -2,7 +2,7 @@
 //! language gets a preflight, then the test command runs with a timeout.
 
 use crate::json::Value;
-use crate::lang::code::bracket_errors;
+use crate::lang::brackets::bracket_errors;
 use crate::walk::is_ignored_dir;
 use std::fs;
 use std::io::Read;
@@ -24,6 +24,19 @@ pub struct VerifyRequest {
 pub fn verify(request: &VerifyRequest) -> Value {
     let static_analysis = static_analysis(&request.edits);
     let preflight = preflight(&request.edits);
+    // An edit with unbalanced brackets cannot pass. Say so now instead of
+    // copying the project and running tests that may not even import it.
+    if crate::canon::get(&preflight, "ok").and_then(crate::canon::as_bool) == Some(false) {
+        return crate::canon::obj(vec![
+            ("success", Value::Bool(false)),
+            ("score", Value::Float(0.0)),
+            ("output", Value::string("")),
+            ("trace", Value::string("preflight failed; tests were not run. Fix the issues in preflight.issues and verify again.")),
+            ("truncated", Value::Bool(false)),
+            ("static_analysis", static_analysis),
+            ("preflight", preflight),
+        ]);
+    }
     if request.test_cmd.is_empty() {
         return crate::canon::obj(vec![
             ("success", Value::Bool(false)),
@@ -34,7 +47,7 @@ pub fn verify(request: &VerifyRequest) -> Value {
             ("preflight", preflight),
         ]);
     }
-    let tmp = std::env::temp_dir().join(format!("trammel-verify-{}-{}", std::process::id(), Instant::now().elapsed().as_nanos()));
+    let tmp = scratch_dir();
     let _ = fs::remove_dir_all(&tmp);
     if let Err(err) = copy_tree(&request.root, &tmp) {
         return fail(&err, static_analysis, preflight);
@@ -62,27 +75,112 @@ pub fn verify(request: &VerifyRequest) -> Value {
     ])
 }
 
+/// A fresh copy target. Two `verify` calls in one process must never share it,
+/// or one run deletes the other's tree mid-test.
+fn scratch_dir() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    std::env::temp_dir().join(format!("trammel-verify-{}-{nanos}-{n}", std::process::id()))
+}
+
 struct Ran { success: bool, output: String, trace: String }
+
+/// Finds `name` on `path` the way a Windows shell does: every `PATHEXT` suffix in
+/// order, so `npm` finds `npm.cmd`. A hit under `Microsoft\WindowsApps` is only a
+/// fallback, because `python3.exe` there is usually the Store installer stub that
+/// exits 49 without running anything. Returns the path and whether it is that alias.
+/// Names with a directory or an extension are left to `Command`.
+pub fn find_program(name: &str, path: Option<&std::ffi::OsStr>, pathext: &str) -> Option<(PathBuf, bool)> {
+    let as_path = Path::new(name);
+    if as_path.components().count() != 1 || as_path.extension().is_some() { return None; }
+    let mut alias = None;
+    for dir in std::env::split_paths(path?) {
+        let is_alias = dir.ends_with(Path::new("Microsoft").join("WindowsApps"));
+        for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+            let candidate = dir.join(format!("{name}{}", ext.to_ascii_lowercase()));
+            // Store aliases are reparse points that `is_file` cannot follow.
+            if fs::symlink_metadata(&candidate).is_err() { continue; }
+            if !is_alias { return Some((candidate, false)); }
+            alias.get_or_insert((candidate, true));
+        }
+    }
+    alias
+}
+
+fn windows_lookup(name: &str) -> Option<(PathBuf, bool)> {
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    find_program(name, std::env::var_os("PATH").as_deref(), &pathext)
+}
+
+/// The program `Command` should start. On Windows a bare `npm` or `npx` is a
+/// `.cmd` shim that `Command::new` does not search for, so resolve it first.
+fn program(name: &str) -> PathBuf {
+    if cfg!(windows) {
+        if let Some((found, _)) = windows_lookup(name) { return found; }
+    }
+    PathBuf::from(name)
+}
+
+/// The Python launcher for the default test command. Elsewhere `python3`. On
+/// Windows the first real `python3` or `python`, then the `py -3` launcher,
+/// skipping Store aliases while any real install exists.
+pub fn python_cmd() -> Vec<String> {
+    if !cfg!(windows) { return vec!["python3".into()]; }
+    // Searching PATH x PATHEXT costs tens of milliseconds on Windows; the
+    // answer does not change while the server runs.
+    static CHOICE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    CHOICE.get_or_init(|| {
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+        windows_python(std::env::var_os("PATH").as_deref(), &pathext)
+    }).clone()
+}
+
+/// The Windows choice behind `python_cmd`, for a given PATH and PATHEXT.
+fn windows_python(path: Option<&std::ffi::OsStr>, pathext: &str) -> Vec<String> {
+    for name in ["python3", "python"] {
+        if let Some((_, false)) = find_program(name, path, pathext) { return vec![name.into()]; }
+    }
+    if find_program("py", path, pathext).is_some() { return vec!["py".into(), "-3".into()]; }
+    vec!["python3".into()]
+}
+
+/// A command that succeeds and does nothing, for languages without a runner.
+pub fn no_op_cmd() -> Vec<String> {
+    if cfg!(windows) { vec!["cmd".into(), "/C".into(), "exit 0".into()] } else { vec!["true".into()] }
+}
+
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe { let _ = pipe.read_to_end(&mut bytes); }
+        String::from_utf8_lossy(&bytes).into_owned()
+    })
+}
 
 fn run_cmd(cwd: &Path, cmd: &[String], timeout: Duration) -> Ran {
     if cmd.is_empty() { return Ran { success: false, output: String::new(), trace: "empty test command".into() }; }
-    let mut child = match Command::new(&cmd[0]).args(&cmd[1..]).current_dir(cwd).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match Command::new(program(&cmd[0])).args(&cmd[1..]).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(child) => child,
-        Err(err) => return Ran { success: false, output: String::new(), trace: err.to_string() },
+        Err(err) => return Ran { success: false, output: String::new(), trace: format!("could not start {}: {err}. Pass test_cmd or set it in .trammel.json", cmd[0]) },
     };
+    // Read both pipes while the test runs. Reading after exit deadlocks once
+    // the output fills the pipe buffer, and the run then looks like a timeout.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
     let start = Instant::now();
     loop {
         if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Ran { success: false, output: "timeout".into(), trace: String::new() };
+            // Do not join the readers: a grandchild may still hold the pipes.
+            drop((stdout, stderr));
+            return Ran { success: false, output: "timeout".into(), trace: format!("test command exceeded {}s and was killed", timeout.as_secs()) };
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut output = String::new();
-                let mut trace = String::new();
-                if let Some(mut stdout) = child.stdout.take() { let _ = stdout.read_to_string(&mut output); }
-                if let Some(mut stderr) = child.stderr.take() { let _ = stderr.read_to_string(&mut trace); }
+                let output = stdout.join().unwrap_or_default();
+                let trace = stderr.join().unwrap_or_default();
                 return Ran { success: status.success(), output, trace };
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(5)),
@@ -102,15 +200,16 @@ fn cap_text(text: &str, cap: usize, full: bool) -> (String, bool) {
     (out, true)
 }
 
+/// True when every edit passes the bracket check.
+pub fn preflight_ok(edits: &[(String, String)]) -> bool {
+    edits.iter().all(|(path, content)| bracket_errors(path.rsplit('.').next().unwrap_or(""), content).is_empty())
+}
+
 fn preflight(edits: &[(String, String)]) -> Value {
     let mut issues = Vec::new();
     for (path, content) in edits {
         let ext = path.rsplit('.').next().unwrap_or("");
-        let tree = crate::syntax::parse(ext, content);
-        if tree.render(content) != *content {
-            issues.push(format!("{path}: parser did not round-trip"));
-        }
-        for err in bracket_errors(content) {
+        for err in bracket_errors(ext, content) {
             issues.push(format!("{path}: {err}"));
         }
     }
@@ -166,3 +265,103 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 pub fn default_cap() -> usize { DEFAULT_CAP }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trammel-harness-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_preflight_failure_is_not_a_success() {
+        let dir = scratch("preflight");
+        std::fs::write(dir.join("ok.py"), "x = 1\n").unwrap();
+        let broken = vec![("ok.py".to_string(), "def f(:\n    pass\n".to_string())];
+        let verdict = verify(&VerifyRequest { edits: broken, root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
+        assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(false), "{}", crate::canon::stable(&verdict));
+        assert!(crate::canon::stable(crate::canon::get(&verdict, "preflight").unwrap()).contains("ok.py: line 1: '(' is never closed"));
+        // The same command passes once the edit is fixed.
+        let fixed = vec![("ok.py".to_string(), "def f():\n    pass\n".to_string())];
+        let verdict = verify(&VerifyRequest { edits: fixed, root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
+        assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(true), "{}", crate::canon::stable(&verdict));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_verifies_get_their_own_copy() {
+        let a = scratch_dir();
+        let b = scratch_dir();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn find_program_uses_pathext_and_skips_store_aliases() {
+        let dir = scratch("path");
+        let store = dir.join("Microsoft").join("WindowsApps");
+        let real = dir.join("Python313");
+        let node = dir.join("nodejs");
+        for d in [&store, &real, &node] { fs::create_dir_all(d).unwrap(); }
+        fs::write(store.join("python3.exe"), b"").unwrap();
+        fs::write(store.join("python.exe"), b"").unwrap();
+        fs::write(real.join("python.exe"), b"").unwrap();
+        fs::write(node.join("npm.cmd"), b"").unwrap();
+        let path = std::env::join_paths([&store, &real, &node]).unwrap();
+        let ext = ".COM;.EXE;.BAT;.CMD";
+        assert_eq!(find_program("npm", Some(&path), ext), Some((node.join("npm.cmd"), false)));
+        // A real install later on PATH wins over the alias earlier on PATH.
+        assert_eq!(find_program("python", Some(&path), ext), Some((real.join("python.exe"), false)));
+        // Only the alias exists: it is returned and marked.
+        assert_eq!(find_program("python3", Some(&path), ext), Some((store.join("python3.exe"), true)));
+        assert_eq!(find_program("cargo", Some(&path), ext), None);
+        assert_eq!(find_program("npm.cmd", Some(&path), ext), None);
+        assert_eq!(find_program("bin/npm", Some(&path), ext), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn large_test_output_does_not_stall_until_the_timeout() {
+        let dir = scratch("big");
+        fs::write(dir.join("big.txt"), "x".repeat(2 << 20)).unwrap();
+        let cat: Vec<String> = if cfg!(windows) { vec!["cmd".into(), "/C".into(), "type big.txt".into()] } else { vec!["cat".into(), "big.txt".into()] };
+        let started = Instant::now();
+        let verdict = verify(&VerifyRequest { edits: vec![], root: dir.clone(), test_cmd: cat, timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
+        assert!(started.elapsed() < Duration::from_secs(15), "verify stalled for {:?}", started.elapsed());
+        assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(true), "{}", crate::canon::stable(&verdict));
+        assert_eq!(crate::canon::get(&verdict, "truncated").and_then(crate::canon::as_bool), Some(true));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_commands_start_on_this_os() {
+        let dir = scratch("noop");
+        let verdict = verify(&VerifyRequest { edits: vec![], root: dir.clone(), test_cmd: no_op_cmd(), timeout: Duration::from_secs(20), full_output: false, cap: DEFAULT_CAP });
+        assert_eq!(crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool), Some(true), "{}", crate::canon::stable(&verdict));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn windows_python_prefers_a_real_install_over_the_store_alias() {
+        let dir = scratch("pychoice");
+        let store = dir.join("Microsoft").join("WindowsApps");
+        let real = dir.join("Python313");
+        let launcher = dir.join("Windows");
+        for d in [&store, &real, &launcher] { fs::create_dir_all(d).unwrap(); }
+        fs::write(store.join("python3.exe"), b"").unwrap();
+        fs::write(store.join("python.exe"), b"").unwrap();
+        let ext = ".COM;.EXE;.BAT;.CMD";
+        let only_alias = std::env::join_paths([&store]).unwrap();
+        assert_eq!(windows_python(Some(&only_alias), ext), vec!["python3"]);
+        fs::write(launcher.join("py.exe"), b"").unwrap();
+        let alias_and_launcher = std::env::join_paths([&store, &launcher]).unwrap();
+        assert_eq!(windows_python(Some(&alias_and_launcher), ext), vec!["py", "-3"]);
+        fs::write(real.join("python.exe"), b"").unwrap();
+        let everything = std::env::join_paths([&store, &launcher, &real]).unwrap();
+        assert_eq!(windows_python(Some(&everything), ext), vec!["python"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

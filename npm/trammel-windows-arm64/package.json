@@ -1,6 +1,6 @@
 {
   "name": "@iron_adamant/trammel-windows-arm64",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "description": "Platform binary for Trammel. Populated by the GitHub Release workflow; not published from a pull request.",
   "os": [
     "win32"

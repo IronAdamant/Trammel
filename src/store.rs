@@ -4,7 +4,8 @@
 use crate::canon::{self, canonical};
 use crate::hash::sha256_hex;
 use crate::json::{self, Value};
-use crate::similarity::goal_similarity;
+use crate::similarity::{concept_similarity, concept_terms, goal_similarity};
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -119,11 +120,124 @@ impl Store {
             if let Ok(parsed) = json::parse(text) { canon::insert(&mut out, "strategy", parsed); }
         }
         canon::insert(&mut out, "steps", Value::Array(steps));
+        canon::insert(&mut out, "notes", Value::Array(self.notes(id)));
         Some(out)
     }
 
+    /// A free-text handoff note on a plan, optionally tied to a step.
+    pub fn add_note(&mut self, plan_id: i64, text: &str, agent: Option<&str>, step_id: Option<i64>) -> i64 {
+        let id = self.next_id("note");
+        self.table_mut("notes").push(canon::obj(vec![
+            ("id", Value::Int(id)),
+            ("plan_id", Value::Int(plan_id)),
+            ("step_id", step_id.map(Value::Int).unwrap_or(Value::Null)),
+            ("agent_id", agent.map(Value::string).unwrap_or(Value::Null)),
+            ("text", Value::string(text)),
+            ("created", Value::Float(now_secs())),
+        ]));
+        self.touch();
+        id
+    }
+
+    /// A plan's notes, oldest first, without the repeated plan_id.
+    pub fn notes(&self, plan_id: i64) -> Vec<Value> {
+        self.rows("notes").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).map(|row| {
+            let mut note = row.clone();
+            if let Value::Object(fields) = &mut note { fields.retain(|(k, _)| k != "plan_id"); }
+            note
+        }).collect()
+    }
+
+    /// One beam's outcome from the goal command, as `history` returns it.
+    pub fn log_trajectory(&mut self, plan_id: i64, beam_id: i64, variant: &str, steps_completed: i64, success: bool, failure_reason: Option<&str>) {
+        let id = self.next_id("trajectory");
+        self.table_mut("trajectories").push(canon::obj(vec![
+            ("id", Value::Int(id)),
+            ("plan_id", Value::Int(plan_id)),
+            ("beam_id", Value::Int(beam_id)),
+            ("variant", Value::string(variant)),
+            ("steps_completed", Value::Int(steps_completed)),
+            ("success", Value::Bool(success)),
+            ("failure_reason", failure_reason.map(Value::string).unwrap_or(Value::Null)),
+            ("created", Value::Float(now_secs())),
+        ]));
+        self.touch();
+    }
+
+    /// Trajectories recorded for a plan: by the goal command, or migrated
+    /// from a 3.x `trammel.db`.
+    pub fn trajectories(&self, plan_id: i64) -> Vec<Value> {
+        self.rows("trajectories").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).cloned().collect()
+    }
+
+    /// Delete plans last updated more than `max_age_days` ago, with their
+    /// steps, notes, trajectories and plan constraints. `status` None means
+    /// any status. Returns how many plans went.
+    pub fn prune_plans(&mut self, max_age_days: f64, status: Option<&str>) -> usize {
+        let cutoff = now_secs() - max_age_days * 86400.0;
+        let doomed: BTreeSet<i64> = self.rows("plans").into_iter().filter(|row| {
+            let updated = canon::get(row, "updated").and_then(canon::as_f64).unwrap_or(0.0);
+            updated < cutoff && status.map(|s| canon::get(row, "status").and_then(canon::as_str) == Some(s)).unwrap_or(true)
+        }).filter_map(|row| canon::get(row, "id").and_then(canon::as_i64)).collect();
+        if doomed.is_empty() { return 0; }
+        self.table_mut("plans").retain(|row| !canon::get(row, "id").and_then(canon::as_i64).map(|id| doomed.contains(&id)).unwrap_or(false));
+        for table in ["steps", "notes", "trajectories", "constraints"] {
+            self.table_mut(table).retain(|row| !canon::get(row, "plan_id").and_then(canon::as_i64).map(|id| doomed.contains(&id)).unwrap_or(false));
+        }
+        self.touch();
+        doomed.len()
+    }
+
+    /// Delete recipes last updated more than `max_age_days` ago whose success
+    /// ratio is below `min_success_ratio` (or that never ran). Returns the count.
+    pub fn prune_recipes(&mut self, max_age_days: f64, min_success_ratio: f64) -> usize {
+        let cutoff = now_secs() - max_age_days * 86400.0;
+        let before = self.rows("recipes").len();
+        self.table_mut("recipes").retain(|row| {
+            let updated = canon::get(row, "updated").and_then(canon::as_f64).unwrap_or(0.0);
+            let ok = canon::get(row, "successes").and_then(canon::as_i64).unwrap_or(0) as f64;
+            let bad = canon::get(row, "failures").and_then(canon::as_i64).unwrap_or(0) as f64;
+            let weak = ok + bad == 0.0 || ok / (ok + bad) < min_success_ratio;
+            !(updated < cutoff && weak)
+        });
+        let removed = before - self.rows("recipes").len();
+        if removed > 0 { self.touch(); }
+        removed
+    }
+
+    /// Check each recipe's files against `root`. A recipe whose files are all
+    /// gone is deleted. Returns (recipes checked, files missing, recipes removed).
+    pub fn validate_recipes(&mut self, root: &Path) -> (usize, usize, usize) {
+        let mut missing_total = 0;
+        let mut dead = BTreeSet::new();
+        let rows: Vec<Value> = self.rows("recipes").into_iter().cloned().collect();
+        for row in &rows {
+            let files = recipe_files(row);
+            let missing = files.iter().filter(|f| !root.join(f).is_file()).count();
+            missing_total += missing;
+            if !files.is_empty() && missing == files.len() {
+                if let Some(sig) = canon::get(row, "sig").and_then(canon::as_str) { dead.insert(sig.to_string()); }
+            }
+        }
+        if !dead.is_empty() {
+            self.table_mut("recipes").retain(|row| !canon::get(row, "sig").and_then(canon::as_str).map(|s| dead.contains(s)).unwrap_or(false));
+            self.touch();
+        }
+        (rows.len(), missing_total, dead.len())
+    }
+
+    /// Plan summaries, newest first: id, goal, status, current_step,
+    /// total_steps, created, updated. get_plan has the rest.
     pub fn list_plans(&self, status: Option<&str>) -> Vec<Value> {
-        self.rows("plans").into_iter().filter(|row| status.map(|s| canon::get(row, "status").and_then(canon::as_str) == Some(s)).unwrap_or(true)).cloned().collect()
+        let mut out: Vec<Value> = self.rows("plans").into_iter().filter(|row| status.map(|s| canon::get(row, "status").and_then(canon::as_str) == Some(s)).unwrap_or(true)).map(|row| {
+            let mut summary = row.clone();
+            if let Value::Object(fields) = &mut summary {
+                fields.retain(|(k, _)| matches!(k.as_str(), "id" | "goal" | "status" | "current_step" | "total_steps" | "created" | "updated"));
+            }
+            summary
+        }).collect();
+        out.reverse();
+        out
     }
 
     pub fn update_plan_status(&mut self, id: i64, status: &str) -> bool {
@@ -135,8 +249,10 @@ impl Store {
         true
     }
 
-    pub fn record_steps(&mut self, steps: &[Value]) -> usize {
+    /// Returns how many steps changed and the ids that matched no step.
+    pub fn record_steps(&mut self, steps: &[Value]) -> (usize, Vec<i64>) {
         let mut n = 0;
+        let mut unknown = Vec::new();
         for incoming in steps {
             let Some(id) = canon::get(incoming, "step_id").and_then(canon::as_i64).or_else(|| canon::get(incoming, "id").and_then(canon::as_i64)) else { continue };
             let status = canon::get(incoming, "status").and_then(canon::as_str).unwrap_or("passed");
@@ -144,10 +260,12 @@ impl Store {
             if let Some(row) = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(id)) {
                 canon::insert(row, "status", Value::string(status));
                 n += 1;
+            } else {
+                unknown.push(id);
             }
         }
         if n > 0 { self.dirty = true; }
-        n
+        (n, unknown)
     }
 
     pub fn add_constraint(&mut self, kind: &str, description: &str, context: &Value, plan_id: Option<i64>, step_id: Option<i64>) -> i64 {
@@ -204,11 +322,16 @@ impl Store {
         sig
     }
 
+    /// The recipe closest to `goal`: the higher of the text blend and the
+    /// concept-term overlap, where the recipe's files and symbols count as
+    /// half-weight context.
     pub fn best_recipe(&self, goal: &str, min_similarity: f64) -> Option<Value> {
         let mut best: Option<(f64, Value)> = None;
+        let query = concept_terms(goal);
         for row in self.rows("recipes") {
             let pattern = canon::get(row, "pattern").and_then(canon::as_str).unwrap_or("");
-            let score = goal_similarity(goal, pattern);
+            let context = recipe_code_terms(row);
+            let score = goal_similarity(goal, pattern).max(concept_similarity(&query, &concept_terms(pattern), &context));
             if score + 1e-12 >= min_similarity && best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
                 best = Some((score, row.clone()));
             }
@@ -229,14 +352,34 @@ impl Store {
         rows
     }
 
-    pub fn claim(&mut self, plan_id: i64, step_id: i64, agent: &str) -> Result<(), String> {
+    /// Ids of the steps `step_id` depends on that are not passed, skipped,
+    /// completed or done yet.
+    pub fn blocking_steps(&self, plan_id: i64, step_id: i64) -> Vec<i64> {
+        let steps: Vec<&Value> = self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).collect();
+        let Some(step) = steps.iter().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id)) else { return Vec::new() };
+        let deps = step_deps(step);
+        steps.iter()
+            .filter(|row| canon::get(row, "step_index").and_then(canon::as_i64).map(|i| deps.contains(&i)).unwrap_or(false))
+            .filter(|row| !is_done(canon::get(row, "status").and_then(canon::as_str).unwrap_or("")))
+            .filter_map(|row| canon::get(row, "id").and_then(canon::as_i64))
+            .collect()
+    }
+
+    /// Claim a step for `agent`. Refused when the step is not in the plan,
+    /// when another agent holds a live claim, or when a step it depends on
+    /// is not done.
+    pub fn claim(&mut self, plan_id: i64, step_id: i64, agent: &str) -> Result<(), ClaimError> {
         let now = now_secs();
+        let blocking = self.blocking_steps(plan_id, step_id);
         let rows = self.table_mut("steps");
-        let row = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).ok_or("step not found")?;
+        let row = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).ok_or(ClaimError::NotFound)?;
         if let (Some(owner), Some(at)) = (canon::get(row, "claimed_by").and_then(canon::as_str), canon::get(row, "claimed_at").and_then(canon::as_f64)) {
             if owner != agent && now - at < 600.0 {
-                return Err(format!("claimed by {owner}"));
+                return Err(ClaimError::Held(owner.to_string()));
             }
+        }
+        if !blocking.is_empty() {
+            return Err(ClaimError::Blocked(blocking));
         }
         canon::insert(row, "claimed_by", Value::string(agent));
         canon::insert(row, "claimed_at", Value::Float(now));
@@ -260,11 +403,16 @@ impl Store {
         Ok(())
     }
 
+    /// Steps an agent can work on now: pending or running, not held by another
+    /// agent's live claim, and every step in `depends_on` (step indexes) done.
     pub fn available(&self, plan_id: i64, agent: &str) -> Vec<Value> {
         let now = now_secs();
-        self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).filter(|row| {
+        let steps: Vec<&Value> = self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).collect();
+        let done: BTreeSet<i64> = steps.iter().filter(|row| is_done(canon::get(row, "status").and_then(canon::as_str).unwrap_or(""))).filter_map(|row| canon::get(row, "step_index").and_then(canon::as_i64)).collect();
+        steps.into_iter().filter(|row| {
             let status = canon::get(row, "status").and_then(canon::as_str).unwrap_or("pending");
             if status != "pending" && status != "running" { return false; }
+            if !step_deps(row).iter().all(|dep| done.contains(dep)) { return false; }
             match (canon::get(row, "claimed_by").and_then(canon::as_str), canon::get(row, "claimed_at").and_then(canon::as_f64)) {
                 (Some(owner), Some(at)) if owner != agent && now - at < 600.0 => false,
                 _ => true,
@@ -311,6 +459,7 @@ impl Store {
             ("recipes", Value::Int(self.rows("recipes").len() as i64)),
             ("constraints", Value::Int(self.rows("constraints").len() as i64)),
             ("failures", Value::Int(self.rows("failures").len() as i64)),
+            ("notes", Value::Int(self.rows("notes").len() as i64)),
             ("usage_events", Value::Int(self.rows("usage_events").len() as i64)),
         ])
     }
@@ -321,8 +470,16 @@ impl Store {
 
     pub fn document(&self) -> &Value { &self.doc }
 
+    /// Take over a whole document (a migrated 3.x database). Id counters
+    /// start after the highest id in each table, so new rows never reuse one.
     pub fn replace_document(&mut self, doc: Value) {
         self.doc = doc;
+        for (table, key) in [("plans", "plan"), ("steps", "step"), ("constraints", "constraint"), ("failures", "failure"), ("trajectories", "trajectory"), ("notes", "note")] {
+            let max = self.rows(table).iter().filter_map(|row| canon::get(row, "id").and_then(canon::as_i64)).max().unwrap_or(0);
+            let counter = format!("next_{key}");
+            let current = canon::get(&self.doc, &counter).and_then(canon::as_i64).unwrap_or(1);
+            canon::insert(&mut self.doc, &counter, Value::Int(current.max(max + 1)));
+        }
         self.touch();
     }
 }
@@ -369,6 +526,57 @@ fn apply_journal(path: &Path, doc: &mut Value) {
     }
 }
 
+fn recipe_strategy(row: &Value) -> Value {
+    match canon::get(row, "strategy") {
+        Some(Value::String(text)) => json::parse(text).unwrap_or(Value::Null),
+        Some(other) => other.clone(),
+        None => Value::Null,
+    }
+}
+
+/// The files a recipe's strategy steps name.
+fn recipe_files(row: &Value) -> Vec<String> {
+    let strategy = recipe_strategy(row);
+    canon::get(&strategy, "steps").and_then(canon::as_array).unwrap_or(&[]).iter().filter_map(|s| canon::get(s, "file").and_then(canon::as_str).map(String::from)).collect()
+}
+
+/// Terms from the files and symbols a recipe's strategy touched.
+fn recipe_code_terms(row: &Value) -> BTreeSet<String> {
+    let strategy = recipe_strategy(row);
+    let mut terms = BTreeSet::new();
+    for step in canon::get(&strategy, "steps").and_then(canon::as_array).unwrap_or(&[]) {
+        if let Some(file) = canon::get(step, "file").and_then(canon::as_str) { terms.extend(concept_terms(file)); }
+        for symbol in canon::get(step, "symbols").and_then(canon::as_array).unwrap_or(&[]) {
+            if let Some(name) = canon::as_str(symbol) { terms.extend(concept_terms(name)); }
+        }
+    }
+    terms
+}
+
+/// Why a claim was refused.
+#[derive(Debug, PartialEq)]
+pub enum ClaimError {
+    NotFound,
+    Held(String),
+    Blocked(Vec<i64>),
+}
+
+/// Step statuses that satisfy a dependency.
+pub fn is_done(status: &str) -> bool {
+    matches!(status, "passed" | "skipped" | "completed" | "done")
+}
+
+/// A step's `depends_on` step indexes. Stored as JSON text; older rows may
+/// hold a plain array.
+pub fn step_deps(step: &Value) -> Vec<i64> {
+    let parsed = match canon::get(step, "depends_on") {
+        Some(Value::String(text)) => json::parse(text).ok(),
+        Some(other) => Some(other.clone()),
+        None => None,
+    };
+    parsed.as_ref().and_then(canon::as_array).map(|items| items.iter().filter_map(canon::as_i64).collect()).unwrap_or_default()
+}
+
 pub fn append_journal(dir: &Path, doc: &Value) -> Result<(), String> {
     let mut file = OpenOptions::new().create(true).append(true).open(dir.join("journal")).map_err(|e| e.to_string())?;
     writeln!(file, "{}", canonical(doc)).map_err(|e| e.to_string())?;
@@ -395,4 +603,135 @@ pub fn journal_len(dir: &Path) -> u64 {
     let mut file = match File::open(dir.join("journal")) { Ok(f) => f, Err(_) => return 0 };
     let _ = file.seek(SeekFrom::End(0));
     file.stream_position().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub fn temp_store(tag: &str) -> (PathBuf, Store) {
+        let dir = std::env::temp_dir().join(format!("trammel-store-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir).unwrap();
+        (dir, store)
+    }
+
+    fn step(file: &str, deps: &[i64]) -> Value {
+        canon::obj(vec![("file", Value::string(file)), ("depends_on", Value::Array(deps.iter().map(|d| Value::Int(*d)).collect()))])
+    }
+
+    fn files(rows: &[Value]) -> Vec<String> {
+        rows.iter().filter_map(|r| canon::get(r, "file").and_then(canon::as_str).map(String::from)).collect()
+    }
+
+    #[test]
+    fn get_recipe_matches_a_paraphrase_but_not_other_work() {
+        let (dir, mut store) = temp_store("recipe");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![canon::obj(vec![("file", Value::string("inventory/report.py")), ("symbols", Value::Array(vec![Value::string("format_report")]))])]))]);
+        store.save_recipe("add a low-stock report listing items whose quantity is below a threshold", &strategy, true);
+        let hit = store.best_recipe("report items with low stock under a threshold", 0.55).expect("paraphrase should match");
+        assert!(canon::get(&hit, "similarity").and_then(canon::as_f64).unwrap() >= 0.55);
+        for other in ["fix the login timeout in the auth module", "add a report of sales by region", "remove the threshold check from the store"] {
+            assert!(store.best_recipe(other, 0.55).is_none(), "{other}");
+        }
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_plans_is_a_newest_first_summary() {
+        let (dir, mut store) = temp_store("list");
+        let first = store.create_plan("first", &canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[])]))]));
+        let second = store.create_plan("second", &canon::obj(vec![("steps", Value::Array(vec![step("b.py", &[])]))]));
+        let listed = store.list_plans(None);
+        let ids: Vec<i64> = listed.iter().filter_map(|p| canon::get(p, "id").and_then(canon::as_i64)).collect();
+        assert_eq!(ids, vec![second, first]);
+        let Value::Object(fields) = &listed[0] else { panic!() };
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+        for key in ["id", "goal", "status", "current_step", "total_steps", "created", "updated"] { assert!(keys.contains(&key), "{key}"); }
+        assert!(!keys.contains(&"strategy") && !keys.contains(&"scaffold"));
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn notes_ride_along_with_the_plan() {
+        let (dir, mut store) = temp_store("notes");
+        let plan = store.create_plan("goal", &canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[])]))]));
+        store.add_note(plan, "a.py done; b.py needs the new Item.stock field", Some("agent-a"), Some(1));
+        store.add_note(plan, "tests pass on Windows", None, None);
+        let got = store.get_plan(plan).unwrap();
+        let notes = canon::get(&got, "notes").and_then(canon::as_array).unwrap();
+        assert_eq!(notes.len(), 2);
+        assert_eq!(canon::get(&notes[0], "agent_id").and_then(canon::as_str), Some("agent-a"));
+        assert!(canon::get(&notes[0], "plan_id").is_none());
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_and_validate_remove_what_they_report() {
+        let (dir, mut store) = temp_store("prune");
+        let old = store.create_plan("old", &canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[])]))]));
+        let fresh = store.create_plan("fresh", &canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[])]))]));
+        store.add_note(old, "stale", None, None);
+        for row in store.table_mut("plans") {
+            if canon::get(row, "id").and_then(canon::as_i64) == Some(old) { canon::insert(row, "updated", Value::Float(0.0)); }
+        }
+        assert_eq!(store.prune_plans(7.0, Some("completed")), 0, "status filter");
+        assert_eq!(store.prune_plans(7.0, Some("pending")), 1);
+        assert!(store.get_plan(old).is_none() && store.get_plan(fresh).is_some());
+        assert!(store.rows("steps").iter().all(|s| canon::get(s, "plan_id").and_then(canon::as_i64) == Some(fresh)));
+        assert!(store.rows("notes").is_empty());
+
+        fs::write(dir.join("kept.py"), "x = 1\n").unwrap();
+        fs::write(dir.join("other.py"), "x = 2\n").unwrap();
+        let with = |file: &str| canon::obj(vec![("steps", Value::Array(vec![step(file, &[])]))]);
+        store.save_recipe("keep me", &with("kept.py"), true);
+        store.save_recipe("files gone", &with("gone.py"), true);
+        store.save_recipe("old failure", &with("other.py"), false);
+        assert_eq!(store.validate_recipes(&dir), (3, 1, 1));
+        for row in store.table_mut("recipes") { canon::insert(row, "updated", Value::Float(0.0)); }
+        assert_eq!(store.prune_recipes(90.0, 0.1), 1, "only the never-successful old recipe");
+        assert_eq!(store.rows("recipes").len(), 1);
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_step_cannot_be_claimed_before_its_dependencies_are_done() {
+        let (dir, mut store) = temp_store("claimdeps");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[]), step("b.py", &[]), step("c.py", &[0, 1])]))]);
+        let plan = store.create_plan("goal", &strategy);
+        let ids: Vec<i64> = canon::get(&store.get_plan(plan).unwrap(), "steps").and_then(canon::as_array).unwrap().iter().filter_map(|s| canon::get(s, "id").and_then(canon::as_i64)).collect();
+        let (a, b, c) = (ids[0], ids[1], ids[2]);
+        assert_eq!(store.claim(plan, c, "x"), Err(ClaimError::Blocked(vec![a, b])));
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(a)), ("status", Value::string("passed"))])]);
+        assert_eq!(store.claim(plan, c, "x"), Err(ClaimError::Blocked(vec![b])));
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(b)), ("status", Value::string("skipped"))])]);
+        assert_eq!(store.claim(plan, c, "x"), Ok(()));
+        assert_eq!(store.claim(plan, 999, "x"), Err(ClaimError::NotFound));
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn available_steps_wait_for_their_dependencies() {
+        let (dir, mut store) = temp_store("deps");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[]), step("b.py", &[0]), step("c.py", &[0, 1]), step("d.py", &[])]))]);
+        let plan = store.create_plan("goal", &strategy);
+        assert_eq!(files(&store.available(plan, "x")), vec!["a.py", "d.py"]);
+        let a = canon::get(&store.available(plan, "x")[0], "id").and_then(canon::as_i64).unwrap();
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(a)), ("status", Value::string("passed"))])]);
+        assert_eq!(files(&store.available(plan, "x")), vec!["b.py", "d.py"]);
+        // A failed dependency does not unblock its dependents.
+        let b = a + 1;
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(b)), ("status", Value::string("failed"))])]);
+        assert_eq!(files(&store.available(plan, "x")), vec!["d.py"]);
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(b)), ("status", Value::string("skipped"))])]);
+        assert_eq!(files(&store.available(plan, "x")), vec!["c.py", "d.py"]);
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

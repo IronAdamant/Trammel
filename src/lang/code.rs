@@ -19,6 +19,15 @@ pub fn parse(source: &str, style: Style, symbols: Vec<SymbolHit>) -> (Tree, Vec<
 
 pub fn lex(source: &str, style: Style) -> Tree {
     let chars: Vec<char> = source.chars().collect();
+    // Byte offset of every char, so each token's offsets are O(1).
+    let mut offsets = Vec::with_capacity(chars.len() + 1);
+    let mut total = 0u32;
+    for ch in &chars {
+        offsets.push(total);
+        total += ch.len_utf8() as u32;
+    }
+    offsets.push(total);
+    let byte_at = |_: &[char], index: usize| offsets[index];
     let mut builder = Builder::new();
     builder.start(kind::FILE, 0);
     let mut i = 0usize;
@@ -67,10 +76,6 @@ pub fn lex(source: &str, style: Style) -> Tree {
     }
     builder.finish(source.len() as u32);
     builder.tree()
-}
-
-fn byte_at(chars: &[char], index: usize) -> u32 {
-    chars[..index].iter().map(|c| c.len_utf8()).sum::<usize>() as u32
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -133,34 +138,3 @@ fn string_end(chars: &[char], i: usize) -> Option<usize> {
     Some(chars.len())
 }
 
-pub fn bracket_errors(source: &str) -> Vec<String> {
-    let mut depth = Vec::new();
-    let mut errors = Vec::new();
-    let chars: Vec<char> = source.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if let Some(end) = string_end(&chars, i) {
-            i = end;
-            continue;
-        }
-        match chars[i] {
-            '(' | '[' | '{' => depth.push(chars[i]),
-            ')' | ']' | '}' => {
-                let open = match chars[i] {
-                    ')' => '(',
-                    ']' => '[',
-                    _ => '{',
-                };
-                if depth.pop() != Some(open) {
-                    errors.push(format!("unbalanced '{}'", chars[i]));
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    if !depth.is_empty() {
-        errors.push("unclosed delimiter".into());
-    }
-    errors
-}

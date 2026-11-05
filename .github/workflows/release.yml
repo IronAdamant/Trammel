@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub Release tag to publish to npm, such as v4.0.0
+        description: Existing GitHub Release tag to publish to npm (vX.Y.Z, matching Cargo.toml at that tag)
         required: true
         type: string
 
@@ -18,8 +18,36 @@ permissions:
   contents: write
 
 jobs:
+  # The version lives in the manifests only. Refuse a tag that disagrees
+  # with them, so a release can never ship binaries under another number.
+  version:
+    name: tag matches the manifests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Compare the tag with Cargo.toml, npm/*/package.json and server.json
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          crate="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [ "${TAG#v}" != "$crate" ]; then
+            echo "tag ${TAG} does not match Cargo.toml version ${crate}; bump the manifests or tag v${crate}"
+            exit 1
+          fi
+          for file in npm/*/package.json server.json; do
+            if grep -E '"[0-9]+\.[0-9]+\.[0-9]+"' "$file" | grep -v "\"${crate}\"" | grep -q .; then
+              echo "${file} has a version other than ${crate}"
+              exit 1
+            fi
+          done
+          echo "releasing ${crate}"
+
   build:
     if: github.event_name == 'push'
+    needs: version
     name: ${{ matrix.asset }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -125,11 +153,14 @@ jobs:
 
   npm:
     name: npm registry
-    needs: github-release
-    if: always() && (github.event_name == 'workflow_dispatch' || needs.github-release.result == 'success')
+    needs: [version, github-release]
+    if: always() && needs.version.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.github-release.result == 'success')
     runs-on: ubuntu-24.04
     steps:
+      # The tagged commit, so the wrapper's optionalDependencies match the release.
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -154,7 +185,7 @@ jobs:
                 *[!A-Za-z0-9._+-]*) echo "tag has unexpected characters"; exit 1 ;;
               esac
               ;;
-            *) echo "tag must look like v4.0.0"; exit 1 ;;
+            *) echo "tag must look like vX.Y.Z"; exit 1 ;;
           esac
           mkdir -p dist
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir dist

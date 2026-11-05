@@ -4,6 +4,7 @@
 
 pub mod analyze;
 pub mod blank;
+pub mod brackets;
 pub(crate) mod code;
 pub mod imports;
 mod json;

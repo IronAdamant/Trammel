@@ -83,10 +83,11 @@ fn run_goal(goal: &str, args: &[String], cwd: &std::path::Path, store: Option<&s
     let result = if dry {
         tools::call(tool, &Value::Object(fields), cwd, store, false)?
     } else {
-        crate::planner::plan_and_execute(&fields_request(&fields), store, flag_words(args, "--test-cmd").as_deref()).map_err(|e| Failure::new("run", e, "Check the test command"))?
+        let dir = crate::root::store_dir(&crate::root::find_root(&root), store);
+        crate::planner::plan_and_execute(&fields_request(&fields), Some(&dir), flag_words(args, "--test-cmd").as_deref()).map_err(|e| Failure::new("run", e, "Check the test command"))?
     };
     if let Some(path) = flag_value(args, "--export") {
-        std::fs::write(path, crate::canon::stable_pretty(&result)).map_err(|e| Failure::new("export", e.to_string(), ""))?;
+        std::fs::write(path, crate::canon::stable_pretty(&result)).map_err(|e| Failure::new("export", e.to_string(), "Check that the --export path is writable"))?;
     }
     emit(&contract::ok(vec![("result", result)]), human);
     Ok(ExitCode::SUCCESS)

@@ -1,6 +1,6 @@
 [package]
 name = "trammel"
-version = "4.0.1"
+version = "4.1.0"
 edition = "2021"
 license = "MIT"
 description = "Dependency-aware planning, verification, and recipe memory for coding agents. std-only."
@@ -16,3 +16,21 @@ path = "src/main.rs"
 [[bin]]
 name = "trammel-mcp"
 path = "src/bin/trammel_mcp.rs"
+
+# Repo checks (std-only ports of the old scripts/*.py). `test = true` makes
+# `cargo test` run their unit tests.
+[[example]]
+name = "check_zero_deps"
+test = true
+
+[[example]]
+name = "check_no_todos"
+test = true
+
+[[example]]
+name = "check_syntax_core"
+test = true
+
+[[example]]
+name = "bench_gate"
+test = true

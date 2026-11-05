@@ -20,11 +20,11 @@ jobs:
       - name: Test
         run: cargo test --locked
       - name: Zero dependencies
-        run: python scripts/check_zero_deps.py
+        run: cargo run --locked --example check_zero_deps
       - name: No leftover markers
-        run: python scripts/check_no_todos.py
+        run: cargo run --locked --example check_no_todos
       - name: Syntax core manifest
-        run: python scripts/check_syntax_core.py
+        run: cargo run --locked --example check_syntax_core
 
   bench-rule:
     name: benchmark regression rule
@@ -37,4 +37,4 @@ jobs:
       - name: Startup beats the Python floor
         run: |
           cargo build --release --locked
-          python scripts/bench_gate.py target/release/trammel
+          cargo run --release --locked --example bench_gate -- target/release/trammel

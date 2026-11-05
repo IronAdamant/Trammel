@@ -95,6 +95,9 @@ impl Engine {
         for source in sources {
             let mut seen: BTreeSet<String> = hybrid.get(&source).cloned().unwrap_or_default().into_iter().collect();
             for (target, kind) in self.implicit_of(&source, files) {
+                // A naming rule can name the source itself (store.py for "store").
+                // A file does not depend on itself.
+                if target == source { continue; }
                 if seen.insert(target.clone()) {
                     hybrid.entry(source.clone()).or_default().push(target);
                     match kind {

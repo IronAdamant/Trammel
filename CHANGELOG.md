@@ -1,6 +1,31 @@
 # Changelog
 
-The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in `README.md` (Full Changelog) and `LLM_Development.md`.
+The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
+
+## 4.1.0 - 2026-11-05
+
+- Version 4.1.0 in every manifest. Tests read `CARGO_PKG_VERSION`, so a bump only edits Cargo.toml, Cargo.lock, `npm/*/package.json` and server.json. `install.sh` / `install.ps1` fetch the latest release unless `TRAMMEL_VERSION` pins one.
+- The release workflow refuses a tag that does not match those manifests, and a `workflow_dispatch` republish uses the tagged commit's npm package files.
+
+- MCP `tools/list` gives every tool a description and a real input schema. List results arrive as `{"items": [...]}` in `structuredContent`; the MCP TypeScript SDK rejected bare arrays.
+- `verify_plan` no longer crashes the server. `claim_step` / `release_step` with a step index say `step_not_found`; `record_steps` lists unknown ids in `not_found`. Missing-argument errors name the argument.
+- `verify_step` runs on Windows: real Python before the Store alias, `.cmd` shims, no stall on large test logs, no shared temp dir between concurrent runs.
+- The 15-file cap keeps the files most relevant to the goal. `.claude` is ignored. Steps no longer depend on themselves.
+- `get_plan` and `resume` no longer repeat every step inside `strategy` (about half the bytes). `start_plan` with `summary_only` still saves every step.
+- `doctor` no longer prints `schema_version` twice.
+- `initialize` echoes `2025-03-26` and `2024-11-05` as well, so older SDK clients connect.
+- `verify_step` preflight is language-aware (no false alarms on 1,242 real files) and a failed preflight is `success: false`, without running tests. Large non-Python files preflight in linear time.
+- `available_steps` only offers steps whose dependencies are passed or skipped, and `claim_step` refuses a blocked step with `step_blocked`, naming the blocking step ids.
+- New primary tool `add_note`: free-text handoff notes on a plan, returned by `get_plan` and `resume`.
+- `prune_recipes`, `prune_plans` and `validate_recipes` do what they say (3.x rules) instead of returning `removed: 0`. `history` returns trajectories; the goal command records one per beam and closes its plan.
+- After `trammel migrate`, new rows get ids after the migrated ones instead of reusing 1, 2, ... The migrate tests read a committed 3.15.3 database, so the test suite needs no Python.
+- `SYSTEM_PROMPT.md` is rewritten for the 4.x tools: the loop, handoff with notes, several agents, conventions, and a tool reference generated from `tools/list`.
+- The goal command reads `test_cmd` from `.trammel.json` and detects the language, like `verify_step`; it ran Python's `unittest` on a Go project. `verify_step` with a failed preflight answers in under 1 ms (it resolved the test command first, about 65 ms on Windows).
+- `list_plans` returns seven-field summaries, newest first, not every stored column. Python-era wording is gone from errors: the `strict_greenfield` rejection and the repo checks (no tracebacks; see MIGRATION.md, Repo checks).
+- `get_recipe` matches paraphrases (stemming, stopwords, relation words, the recipe's files and symbols as half-weight context).
+- The repo checks are std-only Rust (`cargo run --example ...`), replacing `scripts/*.py`.
+
+See MIGRATION.md for details.
 
 ## 4.0.1
 

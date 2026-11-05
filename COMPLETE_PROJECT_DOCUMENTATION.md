@@ -1,8 +1,8 @@
 # Trammel: project documentation index
 
 **Updated:** 2026-11-04
-**Version:** 4.0.1 (Rust binary and npm). The old Python version lives on the `python-legacy` branch.
-**Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 32 MCP tools, 12 primary. Store is `.trammel/`.
+**Version:** 4.1.0 (Rust binary and npm; Cargo.toml is the source). The old Python version lives on the `python-legacy` branch.
+**Purpose:** Dependency-aware planning, isolated verification, and recipe memory for coding agents. One std-only crate. Two binaries. 33 MCP tools, 13 primary. Store is `.trammel/`.
 
 ## Removed from main
 
@@ -29,7 +29,7 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `schemas/`, `server.json`, `npm/`, `install.sh`, `install.ps1` | MCP schemas, registry id, npm layout, release installers. |
 | `.github/workflows/release.yml` | Six binaries, GitHub Release, npm. `workflow_dispatch` republishes an existing tag. |
 | `.github/workflows/rust.yml` | Linux, macOS, and Windows `cargo test`, plus the bench rule. The Python parity job was removed. |
-| `scripts/check_*.py`, `scripts/bench_gate.py`, `scripts/syntax_core_manifest.txt`, `scripts/release.sh` | Rust CI gates. They do not import a Python package. |
+| `examples/check_*.rs`, `examples/bench_gate.rs`, `scripts/syntax_core_manifest.txt`, `scripts/release.sh` | CI gates. The checks are std-only Rust ports of the old `scripts/*.py` (same messages and exit codes). |
 | `bench/` | Recorded timings. |
 | `data/patterns.json` | Compile-time input for implicit edges. |
 
@@ -42,18 +42,18 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `.github/workflows/rust.yml` | cargo test, zero deps, no markers, syntax core, bench rule |
 | `.gitignore` | Build output, store, local databases, editor files |
 | `AGENTS.md` | Module map, commands, release rules for agents |
-| `CHANGELOG.md` | 4.0.1 note, then 4.0.0, plus the Python 3.15.3 notes |
+| `CHANGELOG.md` | 4.x releases, newest first, plus the Python 3.15.3 notes |
 | `CLAUDE.md` | Source-tree guide for coding agents |
 | `Cargo.lock` | Locks the crate to itself. No other packages. |
-| `Cargo.toml` | Crate metadata, version 4.0.1, empty dependencies |
+| `Cargo.toml` | Crate metadata, the version, empty dependencies |
 | `GROK_CONNECTORS.md` | How a Grok client starts trammel mcp |
 | `LICENSE` | MIT licence |
 | `LLM_Development.md` | Chronological log, Python history included |
-| `MIGRATION.md` | Differences between Python 3.15.3 and Rust 4.0.1, for people moving stores and clients |
+| `MIGRATION.md` | Differences between Python 3.15.3 and Rust 4.x, for people moving stores and clients |
 | `README.md` | Install, benchmarks, the Python release notes, and a link to MIGRATION.md |
 | `SYSTEM_PROMPT.md` | MCP and CLI tool loop for LLM clients |
 | `bench/python_baseline.json` | Recorded Python medians used as CI floors |
-| `bench/rust_measured.json` | Last Rust medians written by bench_gate.py |
+| `bench/rust_measured.json` | Last Rust medians written by `examples/bench_gate.rs` |
 | `bench/same_runner.json` | Same-machine Python 3.15.3 vs Rust medians |
 | `data/patterns.json` | Implicit-edge rules embedded by src/implicit.rs |
 | `docs/LLM_CONTRACT.md` | JSON contract 4.0.0 |
@@ -170,10 +170,11 @@ These stay on `python-legacy` at `dc7deb335e91e5a29541733a234dfc1ed24788a3`.
 | `schemas/validate_recipes.schema.json` | JSON schema for one MCP tool or the shared envelope |
 | `schemas/verify_plan.schema.json` | JSON schema for one MCP tool or the shared envelope |
 | `schemas/verify_step.schema.json` | JSON schema for one MCP tool or the shared envelope |
-| `scripts/bench_gate.py` | Time the Rust binary against recorded Python floors |
-| `scripts/check_no_todos.py` | Fail on TODO or FIXME in src |
-| `scripts/check_syntax_core.py` | Check parser files against the manifest |
-| `scripts/check_zero_deps.py` | Fail if Cargo.lock names anything but trammel |
+| `examples/bench_gate.rs` | Time the Rust binary against recorded Python floors |
+| `examples/check_no_todos.rs` | Fail on TODO or FIXME in src |
+| `examples/check_syntax_core.rs` | Check parser files against the manifest |
+| `examples/check_zero_deps.rs` | Fail if Cargo.lock names anything but trammel |
+| `examples/support/py.rs` | Python string and path behaviours the checks reproduce |
 | `scripts/release.sh` | Print the tag command after checking Cargo.toml. Does not publish. |
 | `scripts/syntax_core_manifest.txt` | SHA-256 of the vendored parser files |
 | `server.json` | MCP Registry manifest, schema 2025-12-11, name `io.github.IronAdamant/trammel` |

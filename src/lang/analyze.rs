@@ -34,11 +34,25 @@ pub fn extensions(language: &str) -> &'static [&'static str] {
     }
 }
 
+/// The test command when the caller gives none: `test_cmd` from
+/// `.trammel.json` / `[tool.trammel]`, else the default for `language`, else
+/// the default for the detected language. Detection only runs when needed.
+pub fn default_test_cmd(root: &Path, language: Option<&str>) -> Vec<String> {
+    let cfg = crate::config::load(root);
+    if let Some(cmd) = cfg.test_cmd.clone().filter(|c| !c.is_empty()) {
+        return cmd;
+    }
+    let language = language.map(str::to_string).unwrap_or_else(|| detect(root, &cfg));
+    test_cmd(&language, root)
+}
+
 pub fn test_cmd(language: &str, root: &Path) -> Vec<String> {
     match language {
         "python" => {
             let start = if root.join("tests").is_dir() { "tests" } else { "." };
-            vec!["python3".into(), "-m".into(), "unittest".into(), "discover".into(), "-q".into(), "-s".into(), start.into(), "-p".into(), "test_*.py".into()]
+            let mut cmd = crate::harness::python_cmd();
+            cmd.extend(["-m", "unittest", "discover", "-q", "-s", start, "-p", "test_*.py"].map(String::from));
+            cmd
         }
         "go" => vec!["go".into(), "test".into(), "./...".into()],
         "rust" => vec!["cargo".into(), "test".into()],
@@ -55,7 +69,7 @@ pub fn test_cmd(language: &str, root: &Path) -> Vec<String> {
         "swift" => vec!["swift".into(), "test".into()],
         "dart" => vec!["dart".into(), "test".into()],
         "zig" => vec!["zig".into(), "build".into(), "test".into()],
-        _ => vec!["true".into()],
+        _ => crate::harness::no_op_cmd(),
     }
 }
 
@@ -207,4 +221,23 @@ pub fn estimate(root: &Path, language: &str) -> usize {
         }
     }
     count
+}
+
+#[cfg(test)]
+mod test_cmd_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_test_command_follows_config_then_language() {
+        let dir = std::env::temp_dir().join(format!("trammel-testcmd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("go.mod"), "module example.com/x\n").unwrap();
+        fs::write(dir.join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
+        assert_eq!(default_test_cmd(&dir, None), vec!["go", "test", "./..."], "detected, not Python");
+        assert_eq!(default_test_cmd(&dir, Some("rust")), vec!["cargo", "test"]);
+        fs::write(dir.join(".trammel.json"), r#"{"test_cmd": ["make", "check"]}"#).unwrap();
+        assert_eq!(default_test_cmd(&dir, Some("rust")), vec!["make", "check"], "project config wins");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
