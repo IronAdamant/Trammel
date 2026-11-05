@@ -267,17 +267,34 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// First interpreter that really runs Python with sqlite3. On Windows `python3` is often
+    /// the Microsoft Store alias, which exists on PATH but exits 49 without running anything.
+    fn python_with_sqlite() -> Vec<&'static str> {
+        let candidates: [&[&str]; 3] = [&["python3"], &["python"], &["py", "-3"]];
+        for argv in candidates {
+            let ok = Command::new(argv[0])
+                .args(&argv[1..])
+                .args(["-c", "import sqlite3"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if ok {
+                return argv.to_vec();
+            }
+        }
+        panic!("this test needs Python 3 with sqlite3 as python3, python, or py -3");
+    }
+
     #[test]
     fn reads_a_python_sqlite_database() {
         let dir = std::env::temp_dir().join(format!("trammel-sqlite-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let db = dir.join("sample.db");
-        let script = format!(
-            "import sqlite3; c=sqlite3.connect({:?}); c.execute('create table recipes (sig text primary key, pattern text)'); c.execute('insert into recipes values (?, ?)', ('abc', 'hello goal')); c.commit()",
-            db
-        );
-        let status = Command::new("python3").arg("-c").arg(script).status().unwrap();
+        // The path goes in argv, not the source text: Rust's Debug quoting is not a Python literal.
+        let script = "import sqlite3, sys; c=sqlite3.connect(sys.argv[1]); c.execute('create table recipes (sig text primary key, pattern text)'); c.execute('insert into recipes values (?, ?)', ('abc', 'hello goal')); c.commit()";
+        let python = python_with_sqlite();
+        let status = Command::new(python[0]).args(&python[1..]).arg("-c").arg(script).arg(&db).status().unwrap();
         assert!(status.success());
         let doc = import_database(&db).unwrap();
         assert_eq!(row_count(&doc, "recipes"), 1);

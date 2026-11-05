@@ -11,6 +11,7 @@ import json
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -45,12 +46,43 @@ def mcp_init(argv, runs):
         samples.append(elapsed)
     return samples
 
+def resolve_binary(arg):
+    """Accept the documented `target/release/trammel` on Windows, where the file is `trammel.exe`."""
+    path = Path(arg)
+    if not path.is_file() and path.suffix == "" and path.with_suffix(".exe").is_file():
+        path = path.with_suffix(".exe")
+    if not path.is_file():
+        raise SystemExit(f"{arg}: no such binary; run `cargo build --release` first")
+    return str(path.resolve())
+
+def write_report(path, report):
+    """LF on every OS, so a Windows run does not rewrite every line of the tracked file."""
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8", newline="\n")
+
+def check_helpers():
+    with tempfile.TemporaryDirectory() as tmp:
+        exe = Path(tmp) / "trammel.exe"
+        exe.write_bytes(b"")
+        assert resolve_binary(str(Path(tmp) / "trammel")) == str(exe.resolve())
+        assert resolve_binary(str(exe)) == str(exe.resolve())
+        try:
+            resolve_binary(str(Path(tmp) / "missing"))
+        except SystemExit as err:
+            assert "cargo build --release" in str(err)
+        else:
+            raise AssertionError("a missing binary must fail")
+        out = Path(tmp) / "bench" / "report.json"
+        write_report(out, {"a": 1})
+        assert b"\r" not in out.read_bytes()
+
 def main():
     if "--self-test" in sys.argv:
+        check_helpers()
         subprocess.check_call(["cargo", "test", "--offline", "--lib", "benchstat", "--", "--test-threads", "8"])
         print("A/A passes and injected slowdown fails")
         return
-    binary = sys.argv[1]
+    binary = resolve_binary(sys.argv[1])
     runs = 10
     results = {
         "version": time_ms([binary, "--version"], runs),
@@ -67,8 +99,7 @@ def main():
         if med >= floor:
             failed = True
         print(json.dumps({"name": name, **report[name]}))
-    Path("bench").mkdir(exist_ok=True)
-    Path("bench/rust_measured.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
+    write_report(Path("bench/rust_measured.json"), report)
     if failed:
         sys.exit(1)
 
