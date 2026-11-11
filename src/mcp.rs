@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// same thing in all of them (fields a revision lacks are ignored by clients).
 pub const PROTOCOLS: &[&str] = &["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "Trammel plans multi-file changes in dependency order and keeps plans, constraints, failures and recipes in .trammel/ so later sessions and other agents can pick work up. Loop: get_constraints and get_recipe, start_plan, then per step verify_step (tests run on a temporary copy), then complete_plan. To hand off, add_note what you did and what is left; the next agent calls get_plan with the plan_id and reads the notes. TRAMMEL_MCP_SURFACE=all adds claim_step, available_steps and record_steps for several agents on one plan.";
+const INSTRUCTIONS: &str = "Trammel plans multi-file changes in dependency order and keeps plans, constraints, failures and recipes in .trammel/ so later sessions and other agents can pick work up. Worth it when several files must change in order or work is handed between agents; for a one- or two-file edit, just edit. Name the files in the goal (or pass files) and the plan starts from them. Loop: get_constraints and get_recipe, start_plan, then per step verify_step (tests run on a kept copy with its own build cache; background: true and job_status for long runs), then complete_plan. To hand off, add_note what you did and what is left; the next agent calls get_plan with the plan_id and reads the notes. TRAMMEL_MCP_SURFACE=all adds claim_step, available_steps and record_steps for several agents on one plan.";
 
 pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     let stdin = io::stdin();
@@ -24,6 +24,8 @@ pub fn serve(store: Option<PathBuf>) -> Result<(), String> {
     let surface = std::env::var("TRAMMEL_MCP_SURFACE").unwrap_or_else(|_| "primary".into());
     let telemetry = std::env::var("TRAMMEL_TELEMETRY").ok().as_deref() == Some("1");
     let surface_all = surface == "all" || surface == "full";
+    // Background verify jobs may outlive a call in this process.
+    crate::jobs::enable();
     // A typo in TRAMMEL_TOOLS / TRAMMEL_DISABLE stops the server, so the
     // client shows it as failed instead of silently serving the wrong tools.
     let cwd = std::env::current_dir().unwrap_or_else(|_| path_buf_from("."));

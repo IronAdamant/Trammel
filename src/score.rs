@@ -229,16 +229,22 @@ pub fn generate_steps(
     goal: &str,
     keywords: &BTreeSet<String>,
     anchors: &[String],
+    roles: &BTreeMap<String, &'static str>,
 ) -> Vec<Value> {
     let _ = extract_goal_keywords;
+    let empty: Vec<String> = Vec::new();
     let (indeg, max_in) = dep_indegree(graph);
     let mut steps = Vec::new();
     let mut file_to_step = BTreeMap::new();
     for filepath in file_order {
-        let Some(names) = symbols.get(filepath) else { continue };
-        if names.is_empty() {
-            continue;
-        }
+        let role = roles.get(filepath).copied();
+        // A file the goal names gets a step even when it defines nothing.
+        let named = role.map(|r| r.starts_with("named")).unwrap_or(false);
+        let names = match symbols.get(filepath) {
+            Some(names) if !names.is_empty() => names,
+            _ if named => &empty,
+            _ => continue,
+        };
         let comps = if keywords.is_empty() {
             None
         } else {
@@ -267,6 +273,7 @@ pub fn generate_steps(
             ),
             ("depends_on", Value::Array(depends_on)),
         ]);
+        if let Some(role) = role { crate::canon::insert(&mut step, "role", Value::string(role)); }
         if let Some((kw, gr, comp)) = comps {
             crate::canon::insert(&mut step, "relevance_keyword", Value::Float(py_round(kw, 3)));
             crate::canon::insert(&mut step, "relevance_graph", Value::Float(py_round(gr, 3)));
@@ -305,4 +312,53 @@ pub fn generate_steps(
         ]));
     }
     steps
+}
+
+/// Set a step's relevance and its tier together.
+pub fn set_relevance(step: &mut Value, relevance: f64) {
+    crate::canon::insert(step, "relevance", Value::Float(py_round(relevance, 3)));
+    crate::canon::insert(step, "relevance_tier", Value::string(relevance_tier(relevance)));
+}
+
+/// A test file by path: under a `tests`, `test`, `__tests__` or `spec`
+/// directory, or named `test_*`, `*_test`, `*_tests`, `*.test.*`, `*.spec.*`,
+/// `*_spec`, `tests.rs` or `conftest.py`. Inline `#[cfg(test)]` modules do
+/// not make a file a test file.
+pub fn is_test_file(path: &str) -> bool {
+    let norm = path.replace('\\', "/");
+    let mut parts: Vec<&str> = norm.split('/').collect();
+    let name = parts.pop().unwrap_or("");
+    if parts.iter().any(|d| matches!(*d, "tests" | "test" | "__tests__" | "spec" | "specs")) { return true; }
+    let stem = name.split('.').next().unwrap_or(name);
+    let dotted = name.contains(".test.") || name.contains(".spec.");
+    dotted || stem.starts_with("test_") || stem.ends_with("_test") || stem.ends_with("_tests") || stem.ends_with("_spec") || stem == "tests" || name == "conftest.py"
+}
+
+/// The source file stem a test file is about: `test_models.py` and
+/// `models_test.go` give `models`, `tests/sight.rs` gives `sight`.
+pub fn tested_stem(path: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let stem = name.split('.').next().unwrap_or(name);
+    let stem = stem.strip_prefix("test_").unwrap_or(stem);
+    let stem = ["_tests", "_test", "_spec"].iter().find_map(|s| stem.strip_suffix(s)).unwrap_or(stem);
+    stem.to_string()
+}
+
+#[cfg(test)]
+mod test_file_tests {
+    use super::*;
+
+    #[test]
+    fn test_files_are_told_apart_from_code() {
+        for path in ["tests/test_file_1.py", "crates/app/tests/game.rs", "src/models_test.go", "web/app.test.ts", "web/app.spec.js", "src/ui/engine_tests.rs", "pkg/conftest.py", "src/tests.rs"] {
+            assert!(is_test_file(path), "{path}");
+        }
+        for path in ["src/models.py", "crates/specula/src/sight.rs", "src/latest.rs", "src/contest.py", "src/testing_tools.rs"] {
+            assert!(!is_test_file(path), "{path}");
+        }
+        assert_eq!(tested_stem("tests/test_models.py"), "models");
+        assert_eq!(tested_stem("src/models_test.go"), "models");
+        assert_eq!(tested_stem("crates/app/tests/sight.rs"), "sight");
+        assert_eq!(tested_stem("web/app.test.ts"), "app");
+    }
 }

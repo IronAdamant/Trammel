@@ -1,6 +1,6 @@
 {
   "name": "@iron_adamant/trammel",
-  "version": "4.3.1",
+  "version": "4.4.0",
   "description": "Launcher for the Trammel planning binary. The Rust build has no npm dependencies.",
   "mcpName": "io.github.IronAdamant/trammel",
   "bin": {
@@ -9,12 +9,12 @@
   },
   "files": ["bin"],
   "optionalDependencies": {
-    "@iron_adamant/trammel-linux-x64": "4.3.1",
-    "@iron_adamant/trammel-linux-arm64": "4.3.1",
-    "@iron_adamant/trammel-darwin-x64": "4.3.1",
-    "@iron_adamant/trammel-darwin-arm64": "4.3.1",
-    "@iron_adamant/trammel-windows-x64": "4.3.1",
-    "@iron_adamant/trammel-windows-arm64": "4.3.1"
+    "@iron_adamant/trammel-linux-x64": "4.4.0",
+    "@iron_adamant/trammel-linux-arm64": "4.4.0",
+    "@iron_adamant/trammel-darwin-x64": "4.4.0",
+    "@iron_adamant/trammel-darwin-arm64": "4.4.0",
+    "@iron_adamant/trammel-windows-x64": "4.4.0",
+    "@iron_adamant/trammel-windows-arm64": "4.4.0"
   },
   "engines": { "node": ">=18" }
 }

@@ -32,6 +32,9 @@ pub struct Request {
     pub expand_repo: Option<bool>,
     pub apply_project_config: bool,
     pub num_beams: usize,
+    /// Files the caller names (relative to the project root). The goal's own
+    /// paths and module names are added to these.
+    pub files: Vec<String>,
 }
 
 impl Request {
@@ -53,6 +56,7 @@ impl Request {
             expand_repo: None,
             apply_project_config: true,
             num_beams: 3,
+            files: Vec::new(),
         }
     }
 }
@@ -61,7 +65,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     let started = Instant::now();
     let cfg = if request.apply_project_config { config::load(&request.root) } else { ProjectConfig::default() };
     let scope = request.scope.clone().or_else(|| cfg.default_scope.clone());
-    let keywords = config::merge_keywords(goal::extract_goal_keywords(&request.goal), &request.focus_keywords, &cfg);
+    let keywords = config::merge_keywords(goal::extract_goal_keywords(&goal::keyword_text(&request.goal)), &request.focus_keywords, &cfg);
     let mut globs = request.focus_globs.clone();
     globs.extend(cfg.focus_globs.clone());
     let analysis_root = match &scope {
@@ -69,19 +73,25 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         _ => request.root.clone(),
     };
     // Directories the goal names ("Sepulcra" -> games/sepulcra). An explicit
-    // scope wins over them.
-    let anchors = if scope.as_deref().map(|s| s.is_empty()).unwrap_or(true) { goal_anchors(&request.root, &keywords) } else { Vec::new() };
+    // scope wins over them. A named file's own stem does not anchor: "game.rs"
+    // is not about a games/ directory.
+    let anchor_words = config::merge_keywords(goal::extract_goal_keywords(&goal::anchor_text(&request.goal)), &request.focus_keywords, &cfg);
+    let anchors = if scope.as_deref().map(|s| s.is_empty()).unwrap_or(true) { goal_anchors(&request.root, &anchor_words) } else { Vec::new() };
     if request.strict_greenfield && goal::has_creation_intent(&request.goal) && goal::extract_paths_from_goal(&request.goal).is_empty() {
         return Err("the goal asks to create files but names no file path, and strict_greenfield is set".into());
     }
-    let mut max_files = request.max_files.or(cfg.max_files);
+    let refs = goal::named_refs(&request.goal);
+    let asked_cap = request.max_files.or(cfg.max_files);
+    let mut max_files = asked_cap;
     let expand = request.expand_repo.unwrap_or(true);
     if expand && max_files.map(|n| n > 15).unwrap_or(true) {
         max_files = Some(15);
     }
-    // The language of the code the goal names, when it names a directory:
-    // a Rust crate inside a mostly-Python repo is planned as Rust.
-    let language = request.language.clone().unwrap_or_else(|| match anchors.first() {
+    // The language of the code the goal names: a named file's extension,
+    // else a named directory's contents. A Rust crate inside a mostly-Python
+    // repo is planned as Rust.
+    let named_language = refs.paths.iter().chain(request.files.iter()).find_map(|p| language_of(p));
+    let language = request.language.clone().or(named_language).unwrap_or_else(|| match anchors.first() {
         Some(anchor) => analyze::detect(&request.root.join(anchor), &cfg),
         None => analyze::detect(&analysis_root, &cfg),
     });
@@ -108,29 +118,60 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
             relevant.insert(file.clone(), deps.iter().filter(|d| all.contains(*d)).cloned().collect());
         }
     }
-    let mut order = topological_sort(&relevant);
-    order.retain(|f| symbols.contains_key(f));
-    for file in symbols.keys() {
-        if !order.contains(file) { order.push(file.clone()); }
-    }
+    let about_tests = goal_is_about_tests(&keywords);
+    let named = resolve_named(&refs, &request.files, &all, scope.as_deref(), &analysis_root, &language, &anchors, &anchor_words);
+    let known = all.clone();
+    let mut roles: BTreeMap<String, &'static str> = BTreeMap::new();
     let mut truncated = false;
-    if let Some(limit) = max_files {
-        if limit >= 0 && order.len() > limit as usize {
-            order = keep_most_relevant(order, limit as usize, &symbols, &relevant, &keywords, &anchors);
-            truncated = true;
-            let allowed: BTreeSet<String> = order.iter().cloned().collect();
-            symbols.retain(|k, _| allowed.contains(k));
-            relevant.retain(|k, _| allowed.contains(k));
-            for deps in relevant.values_mut() { deps.retain(|d| allowed.contains(d)); }
-            all = symbols.keys().cloned().chain(relevant.keys().cloned()).collect();
+    let order: Vec<String> = if !named.seeds.is_empty() {
+        // The goal names its files: plan those, plus a few direct
+        // dependencies, dependents and tests ranked below them.
+        // Neighbours come from real imports only: inferred edges link a
+        // hub file to hundreds of others.
+        let picked = seeded_plan(&named.seeds, &graph, &symbols, &keywords, &anchors, asked_cap);
+        let (tests, core): (Vec<String>, Vec<String>) = picked.iter().map(|(f, _)| f.clone()).partition(|f| score::is_test_file(f));
+        roles = picked.into_iter().collect();
+        let mut order = dependency_order(&core, &graph);
+        order.extend(dependency_order(&tests, &graph));
+        let allowed: BTreeSet<String> = order.iter().cloned().collect();
+        symbols.retain(|k, _| allowed.contains(k));
+        relevant = graph.clone();
+        relevant.retain(|k, _| allowed.contains(k));
+        for deps in relevant.values_mut() { deps.retain(|d| allowed.contains(d)); }
+        order
+    } else {
+        let mut order = topological_sort(&relevant);
+        order.retain(|f| symbols.contains_key(f));
+        for file in symbols.keys() {
+            if !order.contains(file) { order.push(file.clone()); }
         }
-    }
-    let mut steps = score::generate_steps(&order, &symbols, &relevant, &request.goal, &keywords, &anchors);
-    if request.relevant_only && !keywords.is_empty() {
+        if let Some(limit) = max_files {
+            if limit >= 0 && order.len() > limit as usize {
+                order = keep_most_relevant(order, limit as usize, &symbols, &relevant, &keywords, &anchors, about_tests);
+                truncated = true;
+                let allowed: BTreeSet<String> = order.iter().cloned().collect();
+                symbols.retain(|k, _| allowed.contains(k));
+                relevant.retain(|k, _| allowed.contains(k));
+                for deps in relevant.values_mut() { deps.retain(|d| allowed.contains(d)); }
+                all = symbols.keys().cloned().chain(relevant.keys().cloned()).collect();
+            }
+        }
+        // Code first in dependency order, then the tests.
+        let (tests, core): (Vec<String>, Vec<String>) = order.into_iter().partition(|f| score::is_test_file(f));
+        for file in &core { roles.insert(file.clone(), "core"); }
+        for file in &tests { roles.insert(file.clone(), "test"); }
+        core.into_iter().chain(tests).collect()
+    };
+    let mut steps = score::generate_steps(&order, &symbols, &relevant, &request.goal, &keywords, &anchors, &roles);
+    rank_by_role(&mut steps, !named.seeds.is_empty(), about_tests);
+    if request.relevant_only && (!keywords.is_empty() || !named.seeds.is_empty()) {
+        // Most relevant first, still code before tests.
         steps.sort_by(|a, b| {
+            let ta = step_is_test(a);
+            let tb = step_is_test(b);
             let ra = canon::get(a, "relevance").and_then(canon::as_f64).unwrap_or(0.0);
             let rb = canon::get(b, "relevance").and_then(canon::as_f64).unwrap_or(0.0);
-            rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal)
+            ta.cmp(&tb).then(rb.partial_cmp(&ra).unwrap_or(std::cmp::Ordering::Equal))
         });
         for (i, step) in steps.iter_mut().enumerate() {
             canon::insert(step, "step_index", Value::Int(i as i64));
@@ -159,6 +200,7 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         ])),
     ]);
     if truncated { canon::insert(&mut meta, "max_files_truncated", Value::Bool(true)); }
+    named.annotate(&mut meta);
     if !anchors.is_empty() { canon::insert(&mut meta, "anchors", Value::Array(anchors.iter().cloned().map(Value::String).collect())); }
     let mut result = canon::obj(vec![
         ("goal", Value::string(request.goal.clone())),
@@ -181,7 +223,8 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     ]);
     if !request.suppress_creation_hints {
         let ranked = canon::get(&result, "steps").and_then(canon::as_array).map(|s| s.to_vec()).unwrap_or_default();
-        if let Some(hints) = creation_hints(&request.goal, &keywords, &all, &language, &ranked) {
+        let files = if named.seeds.is_empty() { &all } else { &known };
+        if let Some(hints) = creation_hints(&request.goal, &keywords, files, &language, &ranked) {
             canon::insert(&mut result, "creation_hints", hints);
         }
     }
@@ -203,20 +246,311 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
 /// highest step relevance (ties by position) and leave the rest in dependency
 /// order. Files without symbols produce no step, so they go last. Without
 /// keywords, keep the first `limit`, as Python's `core.py` did.
-fn keep_most_relevant(order: Vec<String>, limit: usize, symbols: &BTreeMap<String, Vec<String>>, graph: &BTreeMap<String, Vec<String>>, keywords: &BTreeSet<String>, anchors: &[String]) -> Vec<String> {
+fn keep_most_relevant(order: Vec<String>, limit: usize, symbols: &BTreeMap<String, Vec<String>>, graph: &BTreeMap<String, Vec<String>>, keywords: &BTreeSet<String>, anchors: &[String], about_tests: bool) -> Vec<String> {
     if keywords.is_empty() {
         return order.into_iter().take(limit).collect();
     }
     let (indeg, max_in) = score::dep_indegree(graph);
     let mut ranked: Vec<(f64, usize)> = order.iter().enumerate().map(|(i, file)| {
         let names = symbols.get(file).map(|v| v.as_slice()).unwrap_or(&[]);
-        let rank = if names.is_empty() { -1.0 } else { score::relevance_components(file, names, keywords, &indeg, max_in, anchors).2 };
+        let mut rank = if names.is_empty() { -1.0 } else { score::relevance_components(file, names, keywords, &indeg, max_in, anchors).2 };
+        // Test files fill the cap last unless the goal is about tests.
+        if rank > 0.0 && !about_tests && score::is_test_file(file) { rank *= 0.5; }
         (rank, i)
     }).collect();
     ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
     let mut keep: Vec<usize> = ranked.into_iter().take(limit).map(|(_, i)| i).collect();
     keep.sort_unstable();
     keep.into_iter().map(|i| order[i].clone()).collect()
+}
+
+/// The language a file extension belongs to, for a file the goal names.
+fn language_of(path: &str) -> Option<String> {
+    let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
+    let lang = match ext.as_str() {
+        "rs" => "rust",
+        "py" => "python",
+        "go" => "go",
+        "ts" | "tsx" | "mts" => "typescript",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "cpp",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "cs" => "csharp",
+        "rb" => "ruby",
+        "php" => "php",
+        "swift" => "swift",
+        "dart" => "dart",
+        "zig" => "zig",
+        _ => return None,
+    };
+    Some(lang.to_string())
+}
+
+/// True when the goal is about tests themselves ("add tests for ...").
+fn goal_is_about_tests(keywords: &BTreeSet<String>) -> bool {
+    keywords.iter().any(|k| matches!(k.as_str(), "test" | "tests" | "testing" | "spec" | "specs" | "coverage"))
+}
+
+fn step_is_test(step: &Value) -> bool {
+    matches!(canon::get(step, "role").and_then(canon::as_str), Some("test") | Some("named_test"))
+}
+
+/// The files a goal names, resolved against the analyzed files.
+#[derive(Default)]
+struct Named {
+    seeds: Vec<String>,
+    unresolved: Vec<String>,
+    ambiguous: Vec<(String, Vec<String>)>,
+}
+
+impl Named {
+    fn annotate(&self, meta: &mut Value) {
+        if !self.seeds.is_empty() {
+            canon::insert(meta, "plan_source", Value::string("named_files"));
+            canon::insert(meta, "named_files", Value::Array(self.seeds.iter().cloned().map(Value::String).collect()));
+        }
+        if !self.unresolved.is_empty() {
+            canon::insert(meta, "unresolved_files", Value::Array(self.unresolved.iter().cloned().map(Value::String).collect()));
+        }
+        if !self.ambiguous.is_empty() {
+            canon::insert(meta, "ambiguous_files", Value::Object(self.ambiguous.iter().map(|(k, v)| (k.clone(), Value::Array(v.iter().cloned().map(Value::String).collect()))).collect()));
+        }
+        if !self.unresolved.is_empty() || !self.ambiguous.is_empty() {
+            canon::insert(meta, "named_files_hint", Value::string("Pass files as paths relative to project_root (or to scope) to plan from them exactly"));
+        }
+    }
+}
+
+/// One thing the goal or the caller names, and the files it may mean.
+struct Reference {
+    label: String,
+    candidates: Vec<String>,
+    /// Say so in the reply when it matches no file or several.
+    report: bool,
+}
+
+/// Number of leading directory names two paths share.
+fn shared_dirs(a: &str, b: &str) -> usize {
+    let da: Vec<&str> = a.split('/').collect();
+    let db: Vec<&str> = b.split('/').collect();
+    da[..da.len().saturating_sub(1)].iter().zip(&db[..db.len().saturating_sub(1)]).take_while(|(x, y)| x == y).count()
+}
+
+/// Match the goal's paths, file names, Rust module paths and module names
+/// (plus `files`) to analyzed files. A name that fits several files is
+/// settled by the files already matched (same crate or directory), then by
+/// the goal's anchors and words; otherwise it is reported as ambiguous.
+#[allow(clippy::too_many_arguments)]
+fn resolve_named(refs: &goal::NamedRefs, explicit: &[String], files: &BTreeSet<String>, scope: Option<&str>, analysis_root: &Path, language: &str, anchors: &[String], keywords: &BTreeSet<String>) -> Named {
+    let scope_prefix = scope.filter(|s| !s.is_empty()).map(|s| format!("{}/", crate::walk::norm_slash(s)));
+    let by_path = |raw: &str| -> Vec<String> {
+        let mut q = crate::walk::norm_slash(raw);
+        if let Some(prefix) = &scope_prefix {
+            if let Some(rest) = q.strip_prefix(prefix.as_str()) { q = rest.to_string(); }
+        }
+        if q.is_empty() { return Vec::new(); }
+        if files.contains(&q) { return vec![q]; }
+        let suffix = format!("/{q}");
+        let hits: Vec<String> = files.iter().filter(|f| f.ends_with(&suffix)).cloned().collect();
+        // "sight.rs" means src/sight.rs more than tests/sight.rs, unless it
+        // names a test file itself.
+        let code: Vec<String> = hits.iter().filter(|f| !score::is_test_file(f)).cloned().collect();
+        if !score::is_test_file(&q) && !code.is_empty() { code } else { hits }
+    };
+    let mut found: Vec<Reference> = Vec::new();
+    for raw in explicit.iter().chain(refs.paths.iter()) {
+        let label = crate::walk::norm_slash(raw);
+        if found.iter().any(|r| r.label == label) { continue; }
+        found.push(Reference { candidates: by_path(raw), label, report: true });
+    }
+    if language == "rust" && !refs.modules.is_empty() {
+        let packages = crate::lang::rust_mods::Packages::find(analysis_root, files);
+        for path in &refs.modules {
+            let rooted = matches!(path[0].as_str(), "crate" | "self" | "super");
+            let segs: Vec<&str> = path.iter().map(|s| s.as_str()).filter(|s| !matches!(*s, "crate" | "self" | "super")).collect();
+            let candidates: Vec<String> = match packages.src_of(&path[0]) {
+                Some(src) if segs.len() > 1 => crate::lang::rust_mods::module_file(src, &segs[1..], files).into_iter().collect(),
+                _ if rooted && !segs.is_empty() => {
+                    let mut hits = Vec::new();
+                    for depth in (1..=segs.len()).rev() {
+                        let joined = segs[..depth].join("/");
+                        let (file, dir) = (format!("{joined}.rs"), format!("{joined}/mod.rs"));
+                        hits = files.iter().filter(|f| **f == file || f.ends_with(&format!("/{file}")) || **f == dir || f.ends_with(&format!("/{dir}"))).cloned().collect();
+                        if !hits.is_empty() { break; }
+                    }
+                    hits
+                }
+                _ => Vec::new(),
+            };
+            found.push(Reference { label: path.join("::"), candidates, report: false });
+        }
+    }
+    for stem in &refs.stems {
+        let lower = stem.to_lowercase();
+        let candidates: Vec<String> = files.iter().filter(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            let file_stem = name.split('.').next().unwrap_or(name).to_lowercase();
+            let parent_dir = f.rsplit('/').nth(1).unwrap_or("").to_lowercase();
+            file_stem == lower || (parent_dir == lower && matches!(name, "mod.rs" | "__init__.py" | "index.ts" | "index.js"))
+        }).cloned().collect();
+        let code: Vec<String> = candidates.iter().filter(|f| !score::is_test_file(f)).cloned().collect();
+        let candidates = if code.is_empty() || lower.contains("test") { candidates } else { code };
+        found.push(Reference { label: stem.clone(), candidates, report: false });
+    }
+    let mut named = Named::default();
+    let mut open: Vec<Reference> = Vec::new();
+    for reference in found {
+        match reference.candidates.len() {
+            1 => {
+                let file = reference.candidates[0].clone();
+                if !named.seeds.contains(&file) { named.seeds.push(file); }
+            }
+            0 => if reference.report { named.unresolved.push(reference.label) },
+            _ => open.push(reference),
+        }
+    }
+    // Settle names that fit several files, nearest to what is matched first.
+    loop {
+        let mut progress = false;
+        let mut still = Vec::new();
+        for reference in open {
+            match pick_candidate(&reference.candidates, &named.seeds, anchors, keywords) {
+                Some(file) => {
+                    if !named.seeds.contains(&file) { named.seeds.push(file); }
+                    progress = true;
+                }
+                None => still.push(reference),
+            }
+        }
+        open = still;
+        if !progress || open.is_empty() { break; }
+    }
+    for reference in open {
+        if reference.report { named.ambiguous.push((reference.label, reference.candidates.into_iter().take(5).collect())); }
+    }
+    named
+}
+
+/// The one candidate nearest the matched files, else the one inside an
+/// anchor, else the one whose directories name the most goal words.
+fn pick_candidate(candidates: &[String], seeds: &[String], anchors: &[String], keywords: &BTreeSet<String>) -> Option<String> {
+    let unique_best = |scores: Vec<usize>| -> Option<String> {
+        let best = *scores.iter().max()?;
+        if best == 0 || scores.iter().filter(|s| **s == best).count() != 1 { return None; }
+        scores.iter().position(|s| *s == best).map(|i| candidates[i].clone())
+    };
+    if !seeds.is_empty() {
+        let near: Vec<usize> = candidates.iter().map(|c| seeds.iter().map(|s| shared_dirs(c, s)).max().unwrap_or(0)).collect();
+        if let Some(file) = unique_best(near) { return Some(file); }
+    }
+    let inside: Vec<usize> = candidates.iter().map(|c| anchors.iter().any(|a| c.starts_with(&format!("{a}/"))) as usize).collect();
+    if let Some(file) = unique_best(inside) { return Some(file); }
+    let variants = goal::keyword_variants(keywords);
+    let words: Vec<usize> = candidates.iter().map(|c| {
+        let dirs: Vec<&str> = c.split('/').collect();
+        dirs[..dirs.len().saturating_sub(1)].iter().filter(|d| variants.contains(&d.to_lowercase())).count()
+    }).collect();
+    unique_best(words)
+}
+
+/// The named files plus their direct neighbours: what they import, what
+/// imports them, and tests named after them. Neighbours are ranked by goal
+/// relevance, links to named files and nearness, then capped: two per named
+/// file (3 to 8) plus 2 to 4 tests. `max_files`, when given, caps the total.
+fn seeded_plan(seeds: &[String], graph: &BTreeMap<String, Vec<String>>, symbols: &BTreeMap<String, Vec<String>>, keywords: &BTreeSet<String>, anchors: &[String], cap: Option<i64>) -> Vec<(String, &'static str)> {
+    let seed_set: BTreeSet<&str> = seeds.iter().map(|s| s.as_str()).collect();
+    // file -> (links to named files, is a dependency of one)
+    let mut candidates: BTreeMap<String, (usize, bool)> = BTreeMap::new();
+    for seed in seeds {
+        for dep in graph.get(seed).into_iter().flatten() {
+            if !seed_set.contains(dep.as_str()) {
+                candidates.entry(dep.clone()).or_insert((0, true)).0 += 1;
+            }
+        }
+    }
+    for (file, deps) in graph {
+        if seed_set.contains(file.as_str()) { continue; }
+        let links = deps.iter().filter(|d| seed_set.contains(d.as_str())).count();
+        if links > 0 { candidates.entry(file.clone()).or_insert((0, false)).0 += links; }
+    }
+    let seed_stems: BTreeSet<String> = seeds.iter().map(|s| score::tested_stem(s)).collect();
+    for file in symbols.keys() {
+        if !seed_set.contains(file.as_str()) && score::is_test_file(file) && seed_stems.contains(&score::tested_stem(file)) {
+            candidates.entry(file.clone()).or_insert((1, false));
+        }
+    }
+    let (indeg, max_in) = score::dep_indegree(graph);
+    let mut core: Vec<(f64, String, bool)> = Vec::new();
+    let mut tests: Vec<(f64, String)> = Vec::new();
+    for (file, (links, is_dep)) in candidates {
+        let Some(names) = symbols.get(&file).filter(|n| !n.is_empty()) else { continue };
+        let relevance = if keywords.is_empty() { 0.0 } else { score::relevance_components(&file, names, keywords, &indeg, max_in, anchors).2 };
+        let depth = file.split('/').count().max(2) - 1;
+        let near = seeds.iter().map(|s| shared_dirs(&file, s)).max().unwrap_or(0) as f64 / depth as f64;
+        let rank = relevance + 0.15 * (links.min(4) as f64 - 1.0) + 0.3 * near;
+        if score::is_test_file(&file) { tests.push((rank, file)); } else { core.push((rank, file, is_dep)); }
+    }
+    let by_rank = |a: f64, b: f64| b.partial_cmp(&a).unwrap_or(std::cmp::Ordering::Equal);
+    core.sort_by(|a, b| by_rank(a.0, b.0).then(a.1.cmp(&b.1)));
+    tests.sort_by(|a, b| by_rank(a.0, b.0).then(a.1.cmp(&b.1)));
+    let mut core_cap = (2 * seeds.len()).clamp(3, 8);
+    let mut test_cap = seeds.len().clamp(2, 4);
+    if let Some(cap) = cap.filter(|c| *c >= 0) {
+        let room = (cap as usize).saturating_sub(seeds.len());
+        core_cap = core_cap.min(room);
+        test_cap = test_cap.min(room - core_cap.min(core.len()));
+    }
+    let mut out: Vec<(String, &'static str)> = seeds.iter().map(|s| (s.clone(), if score::is_test_file(s) { "named_test" } else { "named" })).collect();
+    // Alternate between what the named files use and what uses them, so a
+    // widely imported change still lists its callers.
+    let (deps, users): (Vec<_>, Vec<_>) = core.into_iter().partition(|c| c.2);
+    let (mut deps, mut users) = (deps.into_iter(), users.into_iter());
+    let mut taken = 0;
+    while taken < core_cap {
+        let mut moved = false;
+        for (_, file, is_dep) in [users.next(), deps.next()].into_iter().flatten() {
+            if taken < core_cap {
+                out.push((file, if is_dep { "dependency" } else { "dependent" }));
+                taken += 1;
+                moved = true;
+            }
+        }
+        if !moved { break; }
+    }
+    out.extend(tests.into_iter().take(test_cap).map(|(_, f)| (f, "test")));
+    out
+}
+
+/// `files` in dependency order (what a file imports comes before it), using
+/// only the edges among them.
+fn dependency_order(files: &[String], graph: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+    let set: BTreeSet<&String> = files.iter().collect();
+    let sub: BTreeMap<String, Vec<String>> = files.iter().map(|f| {
+        let deps = graph.get(f).map(|d| d.iter().filter(|x| set.contains(x) && *x != f).cloned().collect()).unwrap_or_default();
+        (f.clone(), deps)
+    }).collect();
+    topological_sort(&sub)
+}
+
+/// Relevance that says what each step is for. Named files are 1.0. Their
+/// neighbours keep their goal relevance scaled into 0.2-0.6, and their tests
+/// into 0.1-0.4, so a neighbour never looks as important as a named file.
+/// Without named files, tests are halved unless the goal is about tests.
+fn rank_by_role(steps: &mut [Value], seeded: bool, about_tests: bool) {
+    for step in steps.iter_mut() {
+        let role = canon::get(step, "role").and_then(canon::as_str).unwrap_or("").to_string();
+        let r = canon::get(step, "relevance").and_then(canon::as_f64);
+        let next = match role.as_str() {
+            "named" | "named_test" => Some(1.0),
+            "dependency" | "dependent" => Some(0.2 + 0.4 * r.unwrap_or(0.0)),
+            "test" if seeded => Some(0.1 + 0.3 * r.unwrap_or(0.0)),
+            "test" if !about_tests => r.map(|r| r * 0.5),
+            _ => None,
+        };
+        if let Some(value) = next { score::set_relevance(step, value); }
+    }
 }
 
 pub fn explore(request: &Request) -> Result<Value, String> {
@@ -276,7 +610,8 @@ fn ambiguity_value(score: &Ambiguity) -> Value {
 /// under an earlier one are dropped. Ignored and hidden directories are
 /// skipped, and the walk stops six levels down.
 pub fn goal_anchors(root: &Path, keywords: &BTreeSet<String>) -> Vec<String> {
-    let variants = goal::keyword_variants(keywords);
+    // "src", "tests", "crates" say where code lives, not what the goal is about.
+    let variants: BTreeSet<String> = goal::keyword_variants(keywords).into_iter().filter(|v| !goal::GENERIC_DIRS.contains(&v.as_str())).collect();
     let mut found: Vec<String> = Vec::new();
     let mut queue = vec![(root.to_path_buf(), String::new(), 0usize)];
     while let Some((dir, rel, depth)) = queue.pop() {
@@ -287,7 +622,8 @@ pub fn goal_anchors(root: &Path, keywords: &BTreeSet<String>) -> Vec<String> {
             if name.starts_with('.') || crate::walk::is_ignored_dir(&name) { continue; }
             let child = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
             let package = package_name(&path);
-            let hit = variants.contains(&name.to_lowercase()) || package.map(|p| variants.contains(&p)).unwrap_or(false);
+            let by_package = package.as_ref().map(|p| variants.contains(p)).unwrap_or(false);
+            let hit = by_package || (variants.contains(&name.to_lowercase()) && (package.is_some() || has_code(&path, 3)));
             if hit && !found.iter().any(|f| child.starts_with(&format!("{f}/"))) {
                 found.push(child.clone());
             }
@@ -296,6 +632,23 @@ pub fn goal_anchors(root: &Path, keywords: &BTreeSet<String>) -> Vec<String> {
     }
     found.sort();
     found
+}
+
+/// True when `dir`, or a directory up to `depth` levels below it, holds a
+/// source file. A folder of assets named like a goal word is no anchor.
+fn has_code(dir: &Path, depth: usize) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else { return false };
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            if !name.starts_with('.') && !crate::walk::is_ignored_dir(&name) { subdirs.push(entry.path()); }
+        } else if language_of(&name).is_some() {
+            return true;
+        }
+    }
+    depth > 0 && subdirs.iter().any(|d| has_code(d, depth - 1))
 }
 
 /// The package name a Cargo.toml or package.json in `dir` declares, lowercased
@@ -425,6 +778,7 @@ pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: O
     let cmd = test_cmd.map(|c| c.to_vec()).filter(|c| !c.is_empty()).unwrap_or_else(|| {
         analyze::default_test_cmd(&request.root, request.language.as_deref())
     });
+    let timeout = std::time::Duration::from_secs(config::load(&request.root).verify_timeout_s.unwrap_or(crate::harness::DEFAULT_TIMEOUT_S).min(crate::harness::MAX_JOB_TIMEOUT_S));
     let mut outcomes = Vec::with_capacity(beams.len());
     std::thread::scope(|scope| {
         let mut joins = Vec::new();
@@ -432,14 +786,7 @@ pub fn plan_and_execute(request: &Request, store_dir: Option<&Path>, test_cmd: O
             let root = request.root.clone();
             let cmd = cmd.clone();
             joins.push(scope.spawn(move || {
-                crate::harness::verify(&crate::harness::VerifyRequest {
-                    edits: Vec::new(),
-                    root,
-                    test_cmd: cmd,
-                    timeout: std::time::Duration::from_secs(60),
-                    full_output: false,
-                    cap: crate::harness::default_cap(),
-                })
+                crate::harness::verify(&crate::harness::VerifyRequest::new(root, cmd, timeout))
             }));
         }
         for join in joins {
@@ -495,7 +842,7 @@ mod cap_tests {
         assert!(files.contains(&"zz_billing.py".to_string()), "{files:?}");
         assert_eq!(canon::get(&result, "analysis_meta").and_then(|m| canon::get(m, "max_files_truncated")).and_then(canon::as_bool), Some(true));
         // Without keywords the cap keeps the first files in dependency order.
-        let plain = keep_most_relevant((0..20).map(|i| format!("f{i:02}")).collect::<Vec<String>>(), 3, &BTreeMap::new(), &BTreeMap::new(), &BTreeSet::new(), &[]);
+        let plain = keep_most_relevant((0..20).map(|i| format!("f{i:02}")).collect::<Vec<String>>(), 3, &BTreeMap::new(), &BTreeMap::new(), &BTreeSet::new(), &[], false);
         assert_eq!(plain, vec!["f00", "f01", "f02"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -623,5 +970,133 @@ mod anchor_tests {
         assert!(hints.contains("src/props.rs"), "{hints}");
         assert!(!hints.contains(".py"), "{hints}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod named_tests {
+    use super::*;
+
+    fn write(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// A Rust workspace shaped like Specula's timeline lane: the goal names
+    /// sight.rs and game.rs, and many unrelated tool modules exist.
+    fn workspace(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trammel-named-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "Cargo.toml", "[workspace]\nmembers = [\"crates/app\", \"games/arena\"]\n");
+        write(&dir, "crates/app/Cargo.toml", "[package]\nname = \"app\"\n");
+        let mut lib = String::from("pub mod sight;\npub mod game;\npub mod timeline;\n");
+        for name in ["anim_tools", "gi_tools", "perf", "studio", "camera_tools", "playback_tools"] {
+            lib.push_str(&format!("pub mod {name};\n"));
+            write(&dir, &format!("crates/app/src/{name}.rs"), &format!("use crate::game::Game;\npub fn {name}_timeline_camera(g: &Game) {{ let _ = g; }}\n"));
+        }
+        write(&dir, "crates/app/src/lib.rs", &lib);
+        write(&dir, "crates/app/src/sight.rs", "pub struct Camera { pub fov: f32 }\n");
+        write(&dir, "crates/app/src/game.rs", "use crate::sight::Camera;\npub struct Game { pub camera: Camera }\n");
+        write(&dir, "crates/app/src/timeline.rs", "use crate::game::Game;\npub fn play_timeline(g: &mut Game) { let _ = g; }\n");
+        write(&dir, "crates/app/tests/sight.rs", "use app::sight::Camera;\n#[test]\nfn camera_fov() { let _ = Camera { fov: 1.0 }; }\n");
+        write(&dir, "games/arena/Cargo.toml", "[package]\nname = \"arena\"\n");
+        write(&dir, "games/arena/src/lib.rs", "pub mod game;\n");
+        write(&dir, "games/arena/src/game.rs", "pub fn arena_game() {}\n");
+        dir
+    }
+
+    fn steps(result: &Value) -> Vec<(String, String, f64)> {
+        canon::get(result, "steps").and_then(canon::as_array).unwrap().iter().map(|s| (
+            canon::get(s, "file").and_then(canon::as_str).unwrap().to_string(),
+            canon::get(s, "role").and_then(canon::as_str).unwrap_or("").to_string(),
+            canon::get(s, "relevance").and_then(canon::as_f64).unwrap_or(-1.0),
+        )).collect()
+    }
+
+    #[test]
+    fn a_goal_that_names_files_plans_from_them() {
+        let dir = workspace("paths");
+        let request = Request::new("Add a camera timeline: extend Camera in crates/app/src/sight.rs and play it back from crates/app/src/game.rs.", dir.clone());
+        let result = decompose(&request).unwrap();
+        let got = steps(&result);
+        let files: Vec<&str> = got.iter().map(|s| s.0.as_str()).collect();
+        // Named files first-class, in dependency order: game.rs uses sight.rs.
+        let sight = files.iter().position(|f| *f == "crates/app/src/sight.rs").expect("sight.rs is planned");
+        let game = files.iter().position(|f| *f == "crates/app/src/game.rs").expect("game.rs is planned");
+        assert!(sight < game, "{got:?}");
+        assert!(got.iter().filter(|s| s.1 == "named").all(|s| s.2 == 1.0), "{got:?}");
+        // Neighbours rank below the named files, and the cap holds.
+        assert!(got.iter().filter(|s| s.1 != "named").all(|s| s.2 <= 0.6), "{got:?}");
+        assert!(got.len() <= 2 + 4 + 2, "{got:?}");
+        // The test named after sight.rs comes last.
+        assert_eq!(got.last().map(|s| (s.0.as_str(), s.1.as_str())), Some(("crates/app/tests/sight.rs", "test")), "{got:?}");
+        assert!(!files.contains(&"games/arena/src/game.rs"), "{got:?}");
+        let meta = canon::get(&result, "analysis_meta").unwrap();
+        assert_eq!(canon::get(meta, "plan_source").and_then(canon::as_str), Some("named_files"));
+        assert_eq!(canon::get(meta, "language").and_then(canon::as_str), Some("rust"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bare_file_names_settle_near_the_other_named_files() {
+        let dir = workspace("bare");
+        // game.rs exists twice; sight.rs only once, in crates/app.
+        let result = decompose(&Request::new("record keyframes in sight.rs (Camera) and play them from game.rs", dir.clone())).unwrap();
+        let named: Vec<String> = steps(&result).into_iter().filter(|s| s.1 == "named").map(|s| s.0).collect();
+        assert_eq!(named, vec!["crates/app/src/sight.rs", "crates/app/src/game.rs"]);
+        // On its own, game.rs is ambiguous and says so.
+        let alone = decompose(&Request::new("speed up game.rs", dir.clone())).unwrap();
+        let meta = canon::get(&alone, "analysis_meta").unwrap();
+        let ambiguous = canon::stable(canon::get(meta, "ambiguous_files").unwrap());
+        assert_eq!(ambiguous, r#"{"game.rs":["crates/app/src/game.rs","games/arena/src/game.rs"]}"#);
+        assert!(canon::get(meta, "named_files_hint").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_argument_modules_and_unresolved_paths() {
+        let dir = workspace("files");
+        let mut request = Request::new("rework playback", dir.clone());
+        request.files = vec!["crates/app/src/timeline.rs".into(), "crates/app/src/missing.rs".into()];
+        let result = decompose(&request).unwrap();
+        let got = steps(&result);
+        assert_eq!(got[got.iter().position(|s| s.1 == "named").unwrap()].0, "crates/app/src/timeline.rs");
+        let meta = canon::get(&result, "analysis_meta").unwrap();
+        assert_eq!(canon::stable(canon::get(meta, "unresolved_files").unwrap()), r#"["crates/app/src/missing.rs"]"#);
+        // A Rust module path names a file too.
+        let module = decompose(&Request::new("change how app::sight::Camera stores its fov", dir.clone())).unwrap();
+        let named: Vec<String> = steps(&module).into_iter().filter(|s| s.1 == "named").map(|s| s.0).collect();
+        assert_eq!(named, vec!["crates/app/src/sight.rs"]);
+        // So does a module name in backticks.
+        let stem = decompose(&Request::new("tidy the `timeline` module", dir.clone())).unwrap();
+        let named: Vec<String> = steps(&stem).into_iter().filter(|s| s.1 == "named").map(|s| s.0).collect();
+        assert_eq!(named, vec!["crates/app/src/timeline.rs"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// map1's report: test steps ranked alongside the core files.
+    #[test]
+    fn without_named_files_code_comes_first_then_tests_ranked_lower() {
+        let farm = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/archetypes/test_farm");
+        let mut request = Request::new("update shared helpers in module code", farm);
+        request.apply_project_config = false;
+        let got = steps(&decompose(&request).unwrap());
+        let first_test = got.iter().position(|s| s.1 == "test").unwrap();
+        assert!(got[..first_test].iter().all(|s| s.1 == "core"), "{got:?}");
+        assert!(got[first_test..].iter().all(|s| s.1 == "test"), "{got:?}");
+        let best_test = got[first_test..].iter().map(|s| s.2).fold(0.0, f64::max);
+        let best_core = got[..first_test].iter().map(|s| s.2).fold(0.0, f64::max);
+        assert!(best_test <= best_core * 0.5 + 1e-9, "{got:?}");
+    }
+
+    #[test]
+    fn path_words_feed_keywords_but_not_anchors() {
+        assert_eq!(goal::keyword_text("fix crates/specula/src/sight.rs."), "fix  specula sight .");
+        assert_eq!(goal::anchor_text("fix crates/specula/src/sight.rs and game.rs").split_whitespace().collect::<Vec<_>>(), vec!["fix", "specula", "and"]);
+        let refs = goal::named_refs("edit `sight` and the timeline module (not the test file), specula::game::Ctx, game.rs, and src/a/b.py.");
+        assert_eq!(refs.paths, vec!["src/a/b.py", "game.rs"]);
+        assert_eq!(refs.stems, vec!["sight", "timeline"]);
+        assert!(refs.modules.contains(&vec!["specula".to_string(), "game".to_string(), "Ctx".to_string()]));
     }
 }

@@ -17,8 +17,8 @@ Give it a goal and a project. It reads the imports and symbols, orders the files
 
 | Call | What it saves the agent |
 |---|---|
-| `start_plan` / `decompose` | One call returns the files a goal touches, in dependency order, with their symbols and goal relevance. |
-| `verify_step` | Edits applied to a throwaway copy, a syntax preflight, and the project's tests, without touching the working tree. Output is capped at 4 KB. |
+| `start_plan` / `decompose` | One call returns the files a goal touches, code in dependency order and then tests, each with a role and goal relevance. Name the files in the goal (or pass `files`) and the plan starts from them plus a few direct neighbours. Worth it for multi-file changes and handoffs; for a one-file edit, just edit. |
+| `verify_step` | Edits applied to a copy of the project, a syntax preflight, and the project's tests, without touching the working tree. The copy and its cargo target dir are kept, so a second run rebuilds only what changed. `timeout_s` (default 300, 600 per call); `background: true` plus `job_status` for longer runs. Output is capped at 4 KB. |
 | `get_plan` / `add_note` | A saved plan with step status, claims, and the previous agent's notes: how a new session or a sub-agent picks up work cold. |
 | `add_constraint` / `get_constraints` | Rules and known-bad approaches that every later agent reads before editing. |
 | `claim_step` / `available_steps` / `record_steps` | Several agents on one plan without doing the same step twice. Claims expire after 10 minutes. |
@@ -64,7 +64,7 @@ Every tool is in one group. Agents choose a project's groups in its AGENTS.md (s
 |---|---|---|
 | `core` (always on) | `start_plan`, `decompose`, `get_plan`, `resume`, `complete_plan`, `status` | |
 | `plan` | `explore`, `list_plans`, `update_plan_status`, `merge_plans`, `export_plan`, `record_steps`, `history`, `estimate`, `list_strategies` | |
-| `verify` | `verify_step`, `verify_plan` | |
+| `verify` | `verify_step`, `verify_plan`, `job_status`, `cancel_job` | Chisel `start_job` / `job_status` |
 | `recipes` | `save_recipe`, `get_recipe`, `list_recipes` | |
 | `constraints` | `add_constraint`, `get_constraints`, `deactivate_constraint`, `resolve_failure`, `failure_history` | |
 | `locks` | `claim_step`, `release_step`, `available_steps` | Chisel locks, CoordinationHub leases |
@@ -111,7 +111,7 @@ trammel: disable locks, notes
 
 Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.
 
-`tools/list` sizes: default 10,993 bytes; with `TRAMMEL_MCP_SURFACE=all` 23,894, minus `locks` 21,856, minus `notes` 23,132, minus both 21,094; `TRAMMEL_TOOLS=core` 6,044.
+`tools/list` sizes: default 14,641 bytes; with `TRAMMEL_MCP_SURFACE=all` 28,025, minus `locks` 25,987, minus `notes` 27,263, minus both 25,225; `TRAMMEL_TOOLS=core` 7,656.
 
 A typical loop:
 
@@ -139,9 +139,9 @@ trammel "fix tests" --test-cmd pytest -x -q      # plan, then run the tests per 
 
 ## How it works
 
-1. **Decompose.** Parse the project's imports and symbols, add edges inferred from naming and shared-state rules (`data/patterns.json`), sort files by dependency, and score each file's relevance to the goal. A whole-repo plan keeps the 15 most relevant files unless `expand_repo` is false.
+1. **Decompose.** Parse the project's imports and symbols, add edges inferred from naming and shared-state rules (`data/patterns.json`), sort files by dependency, and score each file's relevance to the goal. When the goal names files (paths, `game.rs`, `` `timeline` ``, `app::sight`) or `files` is passed, the plan is those files plus their direct dependencies, dependents and tests from real imports, capped and ranked below them. Otherwise a whole-repo plan keeps the 15 most relevant files unless `expand_repo` is false. Code comes before tests.
 2. **Explore.** Nine orderings (bottom-up, top-down, risk-first, and others) of the same steps, for when the default order is not the one you want.
-3. **Verify.** Copy the project (in a git repo, the files git would commit; ignored build output and data stay behind) to a temporary directory, apply the edits, check syntax, run the test command, and report pass or fail with capped output.
+3. **Verify.** Bring a copy of the project (in a git repo, the files git would commit; ignored build output and data stay behind) up to date, rewriting only files that differ, apply the edits, check syntax, run the test command with the copy's own `CARGO_TARGET_DIR`, and report pass or fail with capped output, `elapsed_s`, and `timed_out` when the limit was hit. The copy lives under `<temp>/trammel-verify-cache/` (`TRAMMEL_VERIFY_CACHE=0` for a fresh copy each time).
 4. **Constrain.** Store rules and failures so later agents see them.
 5. **Remember.** Save a successful strategy; `get_recipe` matches later goals by a text blend (trigram cosine, word Jaccard, substring).
 
@@ -156,11 +156,12 @@ Optional. `.trammel.json` in the project root (or `[tool.trammel]` in `pyproject
   "default_scope": "src/",
   "focus_keywords": ["auth", "login"],
   "max_files": 50,
-  "test_cmd": ["cargo", "test"]
+  "test_cmd": ["cargo", "test"],
+  "verify_timeout_s": 600
 }
 ```
 
-`verify_step` takes its test command from the call's `test_cmd`, then this file, then the language default (`python -m unittest`, `cargo test`, `npm test`, `go test ./...`, and so on). `TRAMMEL_TELEMETRY=1` records local usage counts; nothing leaves the machine.
+`verify_step` takes its test command from the call's `test_cmd`, then this file, then the language default (`python -m unittest`, `cargo test`, `npm test`, `go test ./...`, and so on), and its time limit from `timeout_s`, then `verify_timeout_s`, then 300 seconds. A call that waits stops at 600 seconds; with `background: true` a job may run 3600. `TRAMMEL_TELEMETRY=1` records local usage counts; nothing leaves the machine.
 
 ## Benchmarks
 

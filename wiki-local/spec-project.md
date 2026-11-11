@@ -31,7 +31,7 @@ Document keys: `schema_version`, `plans`, `steps`, `constraints`, `recipes`, `fa
 
 ## 4. Tools
 
-33 tools. The default MCP listing is the 13 primary tools. `TRAMMEL_MCP_SURFACE=all` lists the rest. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
+35 tools. The default MCP listing is the 15 primary tools. `TRAMMEL_MCP_SURFACE=all` lists the rest. Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`.
 
 Primary: `start_plan`, `decompose`, `get_plan`, `complete_plan`, `verify_step`, `get_recipe`, `save_recipe`, `status`, `resume`, `export_plan`, `get_constraints`, `add_constraint`.
 
@@ -51,7 +51,7 @@ Implicit edges come from `data/patterns.json` (embedded) plus an optional `.tram
 
 ## 6. Verification
 
-`verify_step` copies the project to a temp directory, writes the edits, runs a preflight, then the test command. Timeout is 60 seconds. `trace` is capped at 4 KB unless `full_output` is true.
+`verify_step` brings a copy of the project kept per project up to date, writes the edits, runs a preflight, then the test command with its own `CARGO_TARGET_DIR`. Timeout: `timeout_s`, else `verify_timeout_s`, else 300 seconds; at most 600 per call, or 3600 as a background job polled with `job_status`. `trace` is capped at 4 KB unless `full_output` is true.
 
 Test command order: argument, then project config, then the language default. Project config is `.trammel.json`. If that file is absent, a `[tool.trammel]` table in the project's `pyproject.toml` is read. This repository does not ship a `pyproject.toml`.
 

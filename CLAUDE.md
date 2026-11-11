@@ -27,6 +27,7 @@ The repo checks are std-only Rust in `examples/` (the Python scripts they replac
 - `src/` is the library. `src/main.rs` and `src/bin/trammel_mcp.rs` are the two binaries. Both call `src/cli.rs` and `src/tools.rs`.
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs` decompose a goal and run the nine beams. Implicit-edge rules are `data/patterns.json`, embedded with `include_str!`.
 - `src/lang/` detects language, extracts symbols, and resolves imports. Python uses the stele-context parser under `src/syntax/`, `src/lang/python/`, and `src/lang/python_symbols/`. `scripts/syntax_core_manifest.txt` is their digest. Other languages use `src/lang/code.rs`, `src/lang/symbols.rs`, and `src/lang/imports.rs`.
+- `src/harness.rs` runs verify_step in the copy kept by `src/workspace.rs` (stable path per project, files rewritten only when their bytes differ, own `CARGO_TARGET_DIR`). `src/jobs.rs` holds background verify jobs for `job_status` / `cancel_job`.
 - `src/store.rs` is the `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
 - `schemas/` has one result schema per tool. A new tool needs a schema file, a row in `src/tools.rs`, an entry in `src/catalogue.rs` (description and input schema for `tools/list`), and a group in `src/groups.rs`.
 - `tests/archetypes/` and `parity/fixtures/` are sample projects for the Rust tests. They are not a Python package.
@@ -35,7 +36,7 @@ The repo checks are std-only Rust in `examples/` (the Python scripts they replac
 
 ## MCP
 
-The server advertises **33 tools**. Primary surface is 13 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. Tool groups (`src/groups.rs`): an `agent-tools` block in the project's AGENTS.md, and `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` (which win per key), switch groups or tools on and off for MCP; the block is re-read live. A new tool must be added to one group (a test fails otherwise). `tests/goldens/mcp_default_*.jsonl` pin the default `initialize` and `tools/list` to 4.1.0 (except `tools.listChanged`, always true since 4.2.0).
+The server advertises **35 tools**. Primary surface is 15 (`TRAMMEL_MCP_SURFACE=all` lists the rest). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. Tool groups (`src/groups.rs`): an `agent-tools` block in the project's AGENTS.md, and `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` (which win per key), switch groups or tools on and off for MCP; the block is re-read live. A new tool must be added to one group (a test fails otherwise). `tests/goldens/mcp_default_*.jsonl` pin the default `initialize` and `tools/list` (recorded from 4.1.0; changed on purpose in 4.2.0, 4.3.0 and 4.4.0, see the test comment).
 
 ## Add a language
 

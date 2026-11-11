@@ -101,7 +101,7 @@ fn an_agent_can_fill_arguments_from_tools_list_and_act_on_errors() {
         call(9, "claim_step", r#"{"plan_id":1,"step_id":2,"agent_id":"agent-b"}"#),
     ], &dir);
     let tools = match at(&replies[0], &["result", "tools"]) { trammel::json::Value::Array(items) => items.clone(), _ => panic!() };
-    assert_eq!(tools.len(), 33);
+    assert_eq!(tools.len(), 35);
     for tool in &tools {
         let name = trammel::canon::stable(at(tool, &["name"]));
         let description = trammel::canon::as_str(at(tool, &["description"])).unwrap();
@@ -178,7 +178,7 @@ const CORE: &[&str] = &["complete_plan", "decompose", "get_plan", "resume", "sta
 #[test]
 fn without_switches_the_listing_and_instructions_are_unchanged() {
     assert_eq!(listed(&[]), names(trammel::tools::PRIMARY));
-    assert_eq!(listed(&[("TRAMMEL_MCP_SURFACE", "all")]).len(), 33);
+    assert_eq!(listed(&[("TRAMMEL_MCP_SURFACE", "all")]).len(), 35);
     // Empty values count as unset.
     assert_eq!(listed(&[("TRAMMEL_TOOLS", ""), ("TRAMMEL_DISABLE", " ")]), names(trammel::tools::PRIMARY));
     let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}"#.to_string();
@@ -195,11 +195,11 @@ fn tools_and_disable_filter_by_group_and_by_tool() {
     let mut want: Vec<&str> = CORE.to_vec();
     want.extend(["available_steps", "claim_step", "release_step", "verify_step"]);
     assert_eq!(listed(&[("TRAMMEL_TOOLS", "LOCKS, verify_step")]), names(&want));
-    assert_eq!(listed(&[("TRAMMEL_TOOLS", "all")]).len(), 33);
+    assert_eq!(listed(&[("TRAMMEL_TOOLS", "all")]).len(), 35);
     // TRAMMEL_TOOLS replaces the surface default, then TRAMMEL_DISABLE applies.
     assert_eq!(listed(&[("TRAMMEL_TOOLS", "locks"), ("TRAMMEL_DISABLE", "release_step")]).len(), CORE.len() + 2);
     let all_but = listed(&[("TRAMMEL_MCP_SURFACE", "all"), ("TRAMMEL_DISABLE", "locks,notes")]);
-    assert_eq!(all_but.len(), 29);
+    assert_eq!(all_but.len(), 31);
     assert!(!all_but.iter().any(|n| ["claim_step", "release_step", "available_steps", "add_note"].contains(&n.as_str())));
     let primary_but = listed(&[("TRAMMEL_DISABLE", "get_recipe, notes")]);
     assert_eq!(primary_but.len(), trammel::tools::PRIMARY.len() - 2);
@@ -244,7 +244,9 @@ fn unknown_names_and_core_stop_the_server_with_exit_2() {
 /// recorded in `tests/goldens/mcp_default_*.jsonl` (server version masked).
 /// First recorded from a 4.1.0 build; changed on purpose since then:
 /// 4.2.0 `capabilities.tools.listChanged` true, 4.3.0 the `full` argument
-/// on start_plan, decompose, get_plan, resume and get_recipe. Any other
+/// on start_plan, decompose, get_plan, resume and get_recipe; 4.4.0 the
+/// job_status and cancel_job tools, the files, timeout_s and background
+/// arguments, and descriptions that say when a plan helps. Any other
 /// difference fails, so the default surface only changes deliberately.
 #[test]
 fn default_output_matches_the_recorded_golden() {
@@ -328,7 +330,7 @@ fn an_agent_tools_block_in_agents_md_chooses_the_groups() {
     assert!(tail[1].starts_with("Tool groups on: core, plan, verify, recipes, constraints, maintenance; off: locks, notes. Change them in AGENTS.md"), "{}", tail[1]);
     live.send(LIST);
     let names = tool_names(&live.next());
-    assert_eq!(names.len(), 29);
+    assert_eq!(names.len(), 31);
     assert!(!names.iter().any(|n| ["claim_step", "release_step", "available_steps", "add_note"].contains(&n.as_str())));
     live.send(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add_note","arguments":{}}}"#);
     let reply = live.next();
@@ -351,23 +353,46 @@ fn editing_the_block_mid_session_updates_the_list_and_notifies() {
     let dir = project("live", None);
     let mut live = Live::start(&dir, &[]);
     live.send(LIST);
-    assert_eq!(tool_names(&live.next()).len(), 33);
+    assert_eq!(tool_names(&live.next()).len(), 35);
     std::fs::write(dir.join("AGENTS.md"), "```agent-tools\ntrammel: disable locks\n```\n").unwrap();
     live.send(LIST);
     let first = live.next();
     assert_eq!(trammel::canon::as_str(at(&first, &["method"])), Some("notifications/tools/list_changed"), "{}", trammel::canon::stable(&first));
-    assert_eq!(tool_names(&live.next()).len(), 30);
+    assert_eq!(tool_names(&live.next()).len(), 32);
     // A change that leaves the list as it is sends no notification.
     std::fs::write(dir.join("AGENTS.md"), "```agent-tools\n# still one agent\ntrammel: disable locks\n```\n").unwrap();
     live.send(LIST);
     let reply = live.next();
     assert!(trammel::canon::get(&reply, "method").is_none());
-    assert_eq!(tool_names(&reply).len(), 30);
+    assert_eq!(tool_names(&reply).len(), 32);
     // Removing the file restores the defaults, with a notification.
     std::fs::remove_file(dir.join("AGENTS.md")).unwrap();
     live.send(LIST);
     assert_eq!(trammel::canon::as_str(at(&live.next(), &["method"])), Some("notifications/tools/list_changed"));
-    assert_eq!(tool_names(&live.next()).len(), 33);
+    assert_eq!(tool_names(&live.next()).len(), 35);
     live.finish();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A long verify over MCP: the call answers at once with a job id, and the
+/// server keeps answering while the job runs.
+#[test]
+fn a_background_verify_answers_at_once_and_job_status_returns_the_result() {
+    let dir = project("job", None);
+    let slow = if cfg!(windows) { r#"["cmd","/C","ping -n 3 127.0.0.1 >nul"]"# } else { r#"["sh","-c","sleep 2"]"# };
+    let mut live = Live::start(&dir, &[]);
+    let started = std::time::Instant::now();
+    live.send(&format!(r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"verify_step","arguments":{{"test_cmd":{slow},"background":true,"timeout_s":60}}}}}}"#));
+    let reply = live.next();
+    assert!(started.elapsed() < std::time::Duration::from_millis(1500), "verify_step waited for the job");
+    let id = trammel::canon::as_str(at(&reply, &["result", "structuredContent", "job_id"])).expect("a job_id").to_string();
+    live.send(r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#);
+    assert!(trammel::canon::get(&live.next(), "result").is_some(), "the server answers while the job runs");
+    live.send(&format!(r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"job_status","arguments":{{"job_id":"{id}","wait_s":60}}}}}}"#));
+    let done = live.next();
+    assert_eq!(trammel::canon::as_str(at(&done, &["result", "structuredContent", "status"])), Some("completed"), "{}", trammel::canon::stable(&done));
+    assert_eq!(trammel::canon::as_bool(at(&done, &["result", "structuredContent", "result", "success"])), Some(true));
+    live.finish();
+    trammel::workspace::forget(&dir);
     let _ = std::fs::remove_dir_all(&dir);
 }

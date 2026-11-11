@@ -125,6 +125,104 @@ pub fn extract_paths_from_goal(goal: &str) -> Vec<String> {
     ordered
 }
 
+/// Directory names that say where code lives, not what it is about.
+pub const GENERIC_DIRS: &[&str] = &[
+    "src", "lib", "crates", "crate", "packages", "pkg", "apps", "app", "internal", "cmd", "tests",
+    "test", "examples", "benches", "source", "sources", "modules", "main",
+];
+
+/// What a goal names as files. `paths` are file paths and bare file names
+/// with a code extension (`crates/specula/src/sight.rs`, `game.rs`).
+/// `modules` are Rust paths (`specula::sight`, `crate::game::Ctx`). `stems`
+/// are bare names in backticks or next to "module" / "file" (`sight`, "the
+/// timeline module").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NamedRefs {
+    pub paths: Vec<String>,
+    pub modules: Vec<Vec<String>>,
+    pub stems: Vec<String>,
+}
+
+impl NamedRefs {
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.modules.is_empty() && self.stems.is_empty()
+    }
+}
+
+pub fn named_refs(goal: &str) -> NamedRefs {
+    let mut paths = extract_paths_from_goal(goal);
+    for token in bare_file_names(goal) {
+        if !paths.iter().any(|p| p == &token || p.ends_with(&format!("/{token}"))) { paths.push(token); }
+    }
+    let mut modules: Vec<Vec<String>> = Vec::new();
+    for path in crate::lang::rust_mods::paths_in(goal) {
+        if !modules.contains(&path) { modules.push(path); }
+    }
+    let mut stems: Vec<String> = Vec::new();
+    let mut push_stem = |word: &str| {
+        let w = word.trim().to_string();
+        let ok = w.len() > 1 && w.chars().all(is_word_char) && w.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false);
+        let lower = w.to_lowercase();
+        // "the test file", "a source file": words that name no particular file.
+        const VAGUE: &[&str] = &["test", "tests", "source", "code", "data", "project", "target", "config", "rust", "python", "main", "lib"];
+        if ok && !VAGUE.contains(&lower.as_str()) && !STOP.contains(&lower.as_str()) && !ARTICLES.contains(&lower.as_str()) && !CREATION.contains(&lower.as_str()) && !FILE_NOUNS.contains(&lower.as_str()) && !stems.contains(&w) {
+            stems.push(w);
+        }
+    };
+    for raw in quoted(goal, '`') {
+        if !raw.contains("::") && !raw.contains('/') && !raw.contains('.') { push_stem(&raw); }
+    }
+    let words: Vec<&str> = goal.split(|c: char| !(is_word_char(c) || c == '-')).filter(|w| !w.is_empty()).collect();
+    for (i, word) in words.iter().enumerate() {
+        if matches!(word.to_lowercase().as_str(), "module" | "file") {
+            if let Some(prev) = i.checked_sub(1).and_then(|j| words.get(j)) { push_stem(prev); }
+        }
+    }
+    NamedRefs { paths, modules, stems }
+}
+
+/// `game.rs`, `models.py`: file names with a code extension and no directory.
+fn bare_file_names(goal: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in goal.split(|c: char| !(is_path_char(c) || c == '/' || c == '\\')) {
+        let token = token.trim_end_matches('.');
+        if token.contains('/') || token.contains('\\') || token.starts_with('.') { continue; }
+        let Some((stem, _)) = token.rsplit_once('.') else { continue };
+        if stem.is_empty() || !stem.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false) { continue; }
+        if has_code_ext(token) && !out.iter().any(|t: &String| t == token) { out.push(token.to_string()); }
+    }
+    out
+}
+
+/// The goal with every named path cut to the words it is about: a path's
+/// file stem and its directories other than `GENERIC_DIRS`. Keyword scoring
+/// and anchors use this text, so `crates/specula/src/sight.rs` counts as
+/// "specula sight", not as "crates src".
+pub fn keyword_text(goal: &str) -> String {
+    path_words(goal, true)
+}
+
+/// Like `keyword_text` without file stems: the words that may name a
+/// directory to plan inside. "game.rs" says nothing about a games/ folder.
+pub fn anchor_text(goal: &str) -> String {
+    path_words(goal, false)
+}
+
+fn path_words(goal: &str, stems: bool) -> String {
+    let mut text = goal.replace('\\', "/");
+    let mut paths = extract_paths_from_goal(goal);
+    paths.extend(bare_file_names(goal));
+    paths.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    for path in paths {
+        let parts: Vec<&str> = path.split('/').collect();
+        let Some((last, dirs)) = parts.split_last() else { continue };
+        let mut words: Vec<String> = dirs.iter().filter(|part| !GENERIC_DIRS.contains(&part.to_lowercase().as_str())).map(|s| s.to_string()).collect();
+        if stems { words.push(last.rsplit_once('.').map(|(s, _)| s).unwrap_or(last).to_string()); }
+        text = text.replace(&path, &format!(" {} ", words.join(" ")));
+    }
+    text
+}
+
 fn quoted(text: &str, quote: char) -> Vec<String> {
     let mut out = Vec::new();
     let chars: Vec<char> = text.chars().collect();
@@ -153,6 +251,8 @@ fn slash_paths(goal: &str) -> Vec<String> {
                 i += 1;
             }
             let token: String = chars[start..i].iter().collect();
+            // A sentence may end right after a path: "... in src/app.rs."
+            let token = token.trim_end_matches('.').to_string();
             if token.contains('/') && has_code_ext(&token) {
                 let bounded = start == 0
                     || !is_path_char(chars[start - 1])

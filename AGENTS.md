@@ -22,7 +22,8 @@ Those checks are std-only Rust in `examples/`, run from the repo root. No Python
 - `src/syntax/`, `src/lang/python/`, `src/lang/python_symbols/`, `src/lang/json.rs`, `src/lang/kind.rs`: stele-context parser core, commit `244561a491ac4002b2c4bc94a3884091870a6d11`. `scripts/syntax_core_manifest.txt` is their digest. The only local change is a newline index in `python_symbols` so line numbers stay identical without scanning the file prefix per identifier. `cargo run --example check_syntax_core -- --against DIR` compares with a stele checkout and stops at the first file that differs (one of those two).
 - `src/lang/code.rs`: lossless lexer for the other languages.
 - `src/lang/symbols.rs`, `src/lang/imports.rs`: hand-written extractors.
-- `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs`: decompose and the nine beams. Rules are `data/patterns.json`.
+- `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs`: decompose and the nine beams. Rules are `data/patterns.json`. Files the goal names (`goal::named_refs`, plus the `files` argument) seed the plan; `src/lang/rust_mods.rs` is the Rust module resolver that finds their neighbours.
+- `src/harness.rs`, `src/workspace.rs`, `src/jobs.rs`: verify_step. The copy is kept per project with its own cargo target dir; background runs are jobs polled with `job_status`.
 - `src/store.rs`: `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
 - `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces. `src/catalogue.rs`: tool descriptions and input schemas for `tools/list`. `src/groups.rs`: tool groups and the `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` switches.
 - `src/benchstat.rs`: the regression rule.
@@ -36,7 +37,7 @@ Those checks are std-only Rust in `examples/`, run from the repo root. No Python
 
 ## MCP
 
-The Rust server advertises **33 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 13 (the 3.x twelve plus `add_note`). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, a group in `src/groups.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
+The Rust server advertises **35 tools**. `record_step` and `create_plan` return `tool_removed`. `verify_plan` is included. The primary surface is 15 (the 3.x twelve plus `add_note`, `job_status` and `cancel_job`). Protocols: `2026-07-28` (`server/discover`), `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` echoes any of them. New tools need a `schemas/<name>.schema.json` file, a row in `src/tools.rs`, a group in `src/groups.rs`, and a description plus arguments in `src/catalogue.rs` (its tests fail until the arguments match the handler).
 
 ## Tied implicit edges
 
@@ -70,7 +71,7 @@ trammel: disable locks, notes
 |---|---|---|
 | `core` | start_plan, get_plan, resume, complete_plan, decompose, status | Never (always on). |
 | `plan` | alternative orderings, plan lists, merging, export, estimates | You only start, read and complete plans. |
-| `verify` | running the tests on a copy with your edits | You run the tests yourself every time. |
+| `verify` | running the tests on a copy with your edits, in the background for long builds | You run the tests yourself every time. |
 | `recipes` | reusing strategies that worked for similar goals | Work is one-off and nothing repeats. |
 | `constraints` | rules and failure history every agent reads | The project keeps its rules elsewhere. |
 | `locks` | claims so several agents don't take the same step | One agent works on the project, or CoordinationHub manages leases. |
