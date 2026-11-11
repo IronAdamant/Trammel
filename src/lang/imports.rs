@@ -270,81 +270,7 @@ fn read_go_mod(root: &Path) -> (Option<String>, std::path::PathBuf) {
 }
 
 fn rust_imports(root: &Path) -> BTreeMap<String, Vec<String>> {
-    let files: BTreeSet<String> = collect_files(root, &[".rs"]).into_iter().collect();
-    let crates = cargo_crates(root);
-    let mut graph = BTreeMap::new();
-    for rel in &files {
-        let Some(src) = read_lossy(&root.join(rel)).map(|s| strip_c_comments(&s)) else { continue };
-        let mut deps = BTreeSet::new();
-        let dir = parent(rel);
-        for path in capture_all(&src, "use crate::") {
-            resolve_rust_mod(path.split("::").next().unwrap_or(""), "", &files, &mut deps);
-        }
-        for path in capture_all(&src, "use super::") {
-            resolve_rust_mod(path.split("::").next().unwrap_or(""), &parent(&dir), &files, &mut deps);
-        }
-        for path in capture_all(&src, "use self::") {
-            resolve_rust_mod(path.split("::").next().unwrap_or(""), &dir, &files, &mut deps);
-        }
-        for (name, crate_dir) in &crates {
-            let needle = format!("use {name}::");
-            for path in capture_all(&src, &needle) {
-                resolve_rust_mod(path.split("::").next().unwrap_or(""), crate_dir, &files, &mut deps);
-            }
-        }
-        for line in src.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("mod ") {
-                if let Some(name) = rest.trim_end().strip_suffix(';') {
-                    let name = name.trim();
-                    if is_ident(name) { resolve_rust_mod(name, &dir, &files, &mut deps); }
-                }
-            }
-        }
-        deps.remove(rel);
-        if !deps.is_empty() { graph.insert(rel.clone(), deps.into_iter().collect()); }
-    }
-    graph
-}
-
-fn resolve_rust_mod(name: &str, base: &str, files: &BTreeSet<String>, deps: &mut BTreeSet<String>) {
-    let a = if base.is_empty() { format!("{name}.rs") } else { format!("{base}/{name}.rs") };
-    let b = if base.is_empty() { format!("{name}/mod.rs") } else { format!("{base}/{name}/mod.rs") };
-    for candidate in [a, b] {
-        if files.contains(&candidate) { deps.insert(candidate); }
-    }
-}
-
-fn cargo_crates(root: &Path) -> BTreeMap<String, String> {
-    let mut crates = BTreeMap::new();
-    let Some(text) = read_lossy(&root.join("Cargo.toml")) else { return crates };
-    let Some(start) = text.find("members") else { return crates };
-    let Some(open) = text[start..].find('[') else { return crates };
-    let Some(close) = text[start + open..].find(']') else { return crates };
-    let body = &text[start + open + 1..start + open + close];
-    for member in quoted_strings(body) {
-        let dir = root.join(&member);
-        if !dir.is_dir() { continue; }
-        let mut name = member.rsplit('/').next().unwrap_or(&member).replace('-', "_");
-        if let Some(member_toml) = read_lossy(&dir.join("Cargo.toml")) {
-            if let Some(found) = toml_string(&member_toml, "name") { name = found.replace('-', "_"); }
-        }
-        let src = format!("{member}/src");
-        let base = if root.join(&src).is_dir() { src } else { member };
-        crates.insert(name, base);
-    }
-    crates
-}
-
-fn toml_string(text: &str, key: &str) -> Option<String> {
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix(key) {
-            let rest = rest.trim().strip_prefix('=')?.trim();
-            return one_string(rest);
-        }
-    }
-    None
+    crate::lang::rust_mods::rust_imports(root)
 }
 
 fn cpp_imports(root: &Path) -> BTreeMap<String, Vec<String>> {
@@ -699,23 +625,6 @@ fn quote_either(text: &str) -> Option<&str> {
     Some(&body[..body.find(quote)?])
 }
 
-fn capture_all<'a>(src: &'a str, prefix: &str) -> Vec<&'a str> {
-    let mut out = Vec::new();
-    let mut rest = src;
-    while let Some(at) = rest.find(prefix) {
-        let after = &rest[at + prefix.len()..];
-        let end = after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':')).unwrap_or(after.len());
-        if end > 0 { out.push(&after[..end]); }
-        rest = &rest[at + prefix.len()..];
-    }
-    out
-}
-
 fn parent(path: &str) -> String {
     match path.rfind('/') { Some(i) => path[..i].to_string(), None => String::new() }
-}
-
-fn is_ident(text: &str) -> bool {
-    let mut chars = text.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }

@@ -14,7 +14,7 @@ Terms for the 4.x binary. Python-only names (the importable package, `trammel.db
 | **Plan** | A persisted strategy plus step status. Status is pending, running, completed, or failed. |
 | **Constraint** | A recorded failure. Types: avoid, dependency, incompatible, requires. |
 | **Trajectory** | One beam run: outcome, steps completed, failure reason. |
-| **Primary tools** | The 13 tools listed by default. `TRAMMEL_MCP_SURFACE=all` lists all 33. |
+| **Primary tools** | The 15 tools listed by default. `TRAMMEL_MCP_SURFACE=all` lists all 35. |
 | **tool_removed** | The error code for `record_step` and `create_plan`. Replacements are `record_steps` and `start_plan`. |
 | **Store** | `.trammel/store` snapshot plus `journal` and `lock`. |
 | **Migrate** | Read-only import of an old SQLite `trammel.db` into the store. |

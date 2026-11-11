@@ -1,6 +1,6 @@
 [package]
 name = "trammel"
-version = "4.3.1"
+version = "4.4.0"
 edition = "2021"
 license = "MIT"
 description = "Dependency-aware planning, verification, and recipe memory for coding agents. std-only."

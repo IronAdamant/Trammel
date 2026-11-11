@@ -11,6 +11,7 @@ mod json;
 pub mod kind;
 mod python;
 pub(crate) mod python_symbols;
+pub(crate) mod rust_mods;
 pub mod symbols;
 
 use crate::syntax::cst::{Builder, Tree};

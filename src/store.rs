@@ -92,7 +92,7 @@ impl Store {
         ]));
         for (index, step) in steps.iter().enumerate() {
             let sid = self.next_id("step");
-            self.table_mut("steps").push(canon::obj(vec![
+            let mut row = canon::obj(vec![
                 ("id", Value::Int(sid)),
                 ("plan_id", Value::Int(id)),
                 ("step_index", Value::Int(index as i64)),
@@ -105,7 +105,10 @@ impl Store {
                 ("relevance", canon::get(step, "relevance").cloned().unwrap_or(Value::Null)),
                 ("claimed_by", Value::Null),
                 ("claimed_at", Value::Null),
-            ]));
+            ]);
+            // Why the step is in the plan (named, dependency, test, ...).
+            if let Some(role) = canon::get(step, "role").cloned() { canon::insert(&mut row, "role", role); }
+            self.table_mut("steps").push(row);
         }
         self.touch();
         id

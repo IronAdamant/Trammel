@@ -14,6 +14,8 @@ pub struct ProjectConfig {
     pub max_files: Option<i64>,
     pub test_cmd: Option<Vec<String>>,
     pub telemetry: bool,
+    /// Seconds verify_step may run when the call does not say (`timeout_s`).
+    pub verify_timeout_s: Option<u64>,
 }
 
 pub fn load(project: &Path) -> ProjectConfig {
@@ -45,6 +47,7 @@ fn from_value(value: &Value) -> ProjectConfig {
         max_files: crate::canon::get(value, "max_files").and_then(crate::canon::as_i64),
         test_cmd: cmd_field(value, "test_cmd"),
         telemetry: crate::canon::get(value, "telemetry").and_then(crate::canon::as_bool).unwrap_or(false),
+        verify_timeout_s: crate::canon::get(value, "verify_timeout_s").and_then(crate::canon::as_f64).filter(|s| *s >= 1.0).map(|s| s.round() as u64),
     }
 }
 
@@ -93,6 +96,7 @@ fn load_pyproject(path: &Path) -> Option<ProjectConfig> {
             "default_scope" => cfg.default_scope = parse_string(raw),
             "max_files" => cfg.max_files = raw.parse().ok(),
             "telemetry" => cfg.telemetry = raw == "true",
+            "verify_timeout_s" => cfg.verify_timeout_s = raw.parse::<f64>().ok().filter(|s| *s >= 1.0).map(|s| s.round() as u64),
             "focus_keywords" => cfg.focus_keywords = parse_string_array(raw),
             "focus_globs" => cfg.focus_globs = parse_string_array(raw),
             "test_cmd" => {

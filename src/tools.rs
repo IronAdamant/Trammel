@@ -15,7 +15,7 @@ use std::time::Duration;
 pub const PRIMARY: &[&str] = &[
     "start_plan", "decompose", "get_plan", "complete_plan", "verify_step", "get_recipe",
     "save_recipe", "status", "resume", "export_plan", "get_constraints", "add_constraint",
-    "add_note",
+    "add_note", "job_status", "cancel_job",
 ];
 
 pub fn all_names() -> Vec<&'static str> {
@@ -26,7 +26,7 @@ pub fn all_names() -> Vec<&'static str> {
         "get_recipe", "list_recipes", "prune_recipes", "validate_recipes", "list_strategies",
         "add_constraint", "get_constraints", "deactivate_constraint", "failure_history", "add_note",
         "resolve_failure", "status", "estimate", "usage_stats", "history", "list_plans",
-        "prune_plans",
+        "prune_plans", "job_status", "cancel_job",
     ];
     names.sort();
     names
@@ -51,7 +51,7 @@ pub fn call(name: &str, args: &Value, cwd: &Path, store_override: Option<&Path>,
         }
     }
     // verify_plan reads the plan, so it needs the store.
-    let needs_store = !matches!(name, "decompose" | "explore" | "estimate" | "list_strategies" | "verify_step");
+    let needs_store = !matches!(name, "decompose" | "explore" | "estimate" | "list_strategies" | "verify_step" | "job_status" | "cancel_job");
     let mut store = if needs_store { Some(Store::open(&store_path).map_err(|e| Failure::new("store", e, "Check that the store directory is writable"))?) } else { None };
     if telemetry {
         if let Some(store) = store.as_mut() { store.log_usage(name, ""); }
@@ -215,7 +215,13 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             Ok(Value::Array(store.unwrap().available(plan, &agent)))
         }
         "merge_plans" => merge(args, store.unwrap()),
-        "verify_step" => Ok(verify_step(args, root)),
+        "verify_step" => verify_step(args, root),
+        "job_status" => {
+            let id = required_str(args, "job_id")?;
+            let wait = crate::canon::get(args, "wait_s").and_then(crate::canon::as_f64).unwrap_or(0.0);
+            Ok(crate::jobs::status(&id, wait))
+        }
+        "cancel_job" => Ok(crate::jobs::cancel(&required_str(args, "job_id")?)),
         "verify_plan" => verify_plan(args, root, store.unwrap()),
         "export_plan" => export_plan(args, store.unwrap()),
         other => Err(Failure::new("unknown_tool", format!("unknown tool {other}"), "Call tools/list")),
@@ -238,6 +244,7 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
     request.expand_repo = crate::canon::get(args, "expand_repo").and_then(crate::canon::as_bool);
     request.focus_keywords = string_list(args, "focus_keywords");
     request.focus_globs = string_list(args, "focus_globs");
+    request.files = string_list(args, "files");
     if name == "explore" {
         return planner::explore(&request).map_err(|e| Failure::new("decompose_rejected", e, "Name the files to create in the goal (for example src/report.py), or set strict_greenfield to false"));
     }
@@ -278,7 +285,7 @@ fn pick(value: &Value, keys: &[&str]) -> Value {
 }
 
 fn compact_meta(meta: Option<&Value>) -> Value {
-    meta.map(|m| pick(m, &["language", "scope", "anchors", "files_analyzed", "max_files_truncated"])).unwrap_or(Value::Object(vec![]))
+    meta.map(|m| pick(m, &["language", "scope", "anchors", "files_analyzed", "max_files_truncated", "plan_source", "named_files", "unresolved_files", "ambiguous_files", "named_files_hint"])).unwrap_or(Value::Object(vec![]))
 }
 
 /// The default start_plan / decompose reply: what an agent acts on.
@@ -286,7 +293,7 @@ fn compact_meta(meta: Option<&Value>) -> Value {
 /// dependencies and relevance.
 fn compact_strategy(full: &Value) -> Value {
     let steps: Vec<Value> = crate::canon::get(full, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
-        .map(|s| pick(s, &["step_index", "file", "description", "depends_on", "relevance"]))
+        .map(|s| pick(s, &["step_index", "file", "role", "description", "depends_on", "relevance"]))
         .collect();
     let mut out = pick(full, &["goal", "goal_fingerprint"]);
     crate::canon::insert(&mut out, "steps", Value::Array(steps));
@@ -303,7 +310,7 @@ fn compact_strategy(full: &Value) -> Value {
 fn compact_plan(plan: &Value) -> Value {
     let mut out = pick(plan, &["id", "goal", "status", "current_step", "total_steps", "created", "updated"]);
     let steps: Vec<Value> = crate::canon::get(plan, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
-        .map(|s| pick(s, &["id", "step_index", "file", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at"]))
+        .map(|s| pick(s, &["id", "step_index", "file", "role", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at"]))
         .collect();
     crate::canon::insert(&mut out, "steps", Value::Array(steps));
     crate::canon::insert(&mut out, "notes", crate::canon::get(plan, "notes").cloned().unwrap_or(Value::Array(vec![])));
@@ -359,10 +366,31 @@ fn complete(args: &Value, store: &mut Store) -> Result<Value, Failure> {
     Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("recipe", Value::string(sig)), ("outcome", Value::Bool(outcome))]))
 }
 
-fn verify_step(args: &Value, fallback: &Path) -> Value {
+/// The verify time limit: `timeout_s`, else `verify_timeout_s` from the
+/// project config, else 300 s, capped at 600 s for a call that waits and
+/// 3600 s for a background job. The second value explains a cap.
+fn verify_timeout(args: &Value, root: &Path, background: bool) -> (Duration, Option<String>) {
+    let asked = crate::canon::get(args, "timeout_s").and_then(crate::canon::as_f64)
+        .or_else(|| config::load(root).verify_timeout_s.map(|s| s as f64))
+        .unwrap_or(harness::DEFAULT_TIMEOUT_S as f64);
+    let max = if background { harness::MAX_JOB_TIMEOUT_S } else { harness::MAX_SYNC_TIMEOUT_S };
+    let secs = asked.round().clamp(1.0, max as f64) as u64;
+    let note = (asked > max as f64).then(|| if background {
+        format!("timeout_s {asked} was capped at {max} for a background job")
+    } else {
+        format!("timeout_s {asked} was capped at {max} for a call that waits; pass background: true for up to {}", harness::MAX_JOB_TIMEOUT_S)
+    });
+    (Duration::from_secs(secs), note)
+}
+
+fn verify_step(args: &Value, fallback: &Path) -> Result<Value, Failure> {
     let root = arg_path(args, "project_root").unwrap_or_else(|| fallback.to_path_buf());
     let edits = edits_of(args);
     let full = crate::canon::get(args, "full_output").and_then(crate::canon::as_bool).unwrap_or(false);
+    let background = crate::canon::get(args, "background").and_then(crate::canon::as_bool).unwrap_or(false);
+    if background && !crate::jobs::enabled() {
+        return Err(Failure::new("background_unavailable", "background jobs need the MCP server; this process exits after one call", "Drop background (the CLI waits for the result), or call verify_step through trammel mcp"));
+    }
     // Only work out a test command when it will run: a failed preflight
     // answers at once, and an explicit or configured command needs no
     // language detection.
@@ -375,21 +403,46 @@ fn verify_step(args: &Value, fallback: &Path) -> Value {
             _ => analyze::default_test_cmd(&root, crate::canon::get(args, "language").and_then(crate::canon::as_str)),
         }
     };
-    harness::verify(&VerifyRequest { edits, root, test_cmd, timeout: Duration::from_secs(60), full_output: full, cap: harness::default_cap() })
+    let (timeout, note) = verify_timeout(args, &root, background);
+    let request = VerifyRequest { edits, full_output: full, ..VerifyRequest::new(root, test_cmd, timeout) };
+    let mut reply = if background {
+        crate::jobs::start(request).map_err(|e| Failure::new("too_many_jobs", e, "Wait for a job with job_status, or stop one with cancel_job"))?
+    } else {
+        harness::verify(&request)
+    };
+    if let Some(note) = note { crate::canon::insert(&mut reply, "timeout_note", Value::string(note)); }
+    Ok(reply)
 }
 
+/// verify_step for each step with content, in order. The whole call stays
+/// within 600 s: each step gets what is left of that budget at most.
 fn verify_plan(args: &Value, fallback: &Path, store: &mut Store) -> Result<Value, Failure> {
     let id = required_i64(args, "plan_id")?;
     let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
     let steps = crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).map(|items| items.to_vec()).unwrap_or_default();
+    let root = arg_path(args, "project_root").unwrap_or_else(|| fallback.to_path_buf());
+    let (per_step, _) = verify_timeout(args, &root, false);
+    let budget = Duration::from_secs(harness::MAX_SYNC_TIMEOUT_S);
+    let started = std::time::Instant::now();
     let mut completed = 0i64;
     for step in &steps {
         let content = crate::canon::get(step, "content").and_then(crate::canon::as_str);
         let file = crate::canon::get(step, "file").and_then(crate::canon::as_str);
         if let (Some(file), Some(content)) = (file, content) {
+            let left = budget.saturating_sub(started.elapsed());
+            if left < Duration::from_secs(1) {
+                return Ok(crate::canon::obj(vec![
+                    ("success", Value::Bool(false)),
+                    ("timed_out", Value::Bool(true)),
+                    ("steps_completed", Value::Int(completed)),
+                    ("hint", Value::string(format!("verify_plan stops after {}s in one call. Run verify_step for the remaining steps, with background: true for long test runs", harness::MAX_SYNC_TIMEOUT_S))),
+                ]));
+            }
             let mut one = args.clone();
             crate::canon::insert(&mut one, "edits", Value::Array(vec![crate::canon::obj(vec![("path", Value::string(file)), ("content", Value::string(content))])]));
-            let verdict = verify_step(&one, fallback);
+            crate::canon::insert(&mut one, "timeout_s", Value::Int(per_step.min(left).as_secs() as i64));
+            crate::canon::insert(&mut one, "background", Value::Bool(false));
+            let verdict = verify_step(&one, fallback)?;
             if crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool) != Some(true) {
                 return Ok(crate::canon::obj(vec![("success", Value::Bool(false)), ("steps_completed", Value::Int(completed)), ("failed_step", step.clone()), ("verdict", verdict)]));
             }
@@ -492,13 +545,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rust_surface_is_33_tools_including_verify_plan() {
+    fn rust_surface_is_35_tools_including_verify_plan_and_jobs() {
         let names = all_names();
-        assert_eq!(names.len(), 33, "{names:?}");
+        assert_eq!(names.len(), 35, "{names:?}");
         assert!(names.contains(&"verify_plan"));
         assert!(!names.contains(&"record_step"));
         assert!(!names.contains(&"create_plan"));
-        assert_eq!(PRIMARY.len(), 13);
+        assert_eq!(PRIMARY.len(), 15);
+        assert!(PRIMARY.contains(&"job_status") && PRIMARY.contains(&"cancel_job"), "a background verify needs its poll on the default surface");
         assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
@@ -580,6 +634,59 @@ mod tests {
     }
 
     #[test]
+    fn verify_timeouts_come_from_the_call_then_config_and_are_capped() {
+        let dir = std::env::temp_dir().join(format!("trammel-verify-timeout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let none = crate::canon::obj(vec![]);
+        assert_eq!(verify_timeout(&none, &dir, false), (Duration::from_secs(harness::DEFAULT_TIMEOUT_S), None));
+        std::fs::write(dir.join(".trammel.json"), r#"{"verify_timeout_s": 900}"#).unwrap();
+        let (secs, note) = verify_timeout(&none, &dir, false);
+        assert_eq!(secs, Duration::from_secs(600));
+        assert!(note.unwrap().contains("background: true"));
+        assert_eq!(verify_timeout(&none, &dir, true), (Duration::from_secs(900), None));
+        let asked = crate::canon::obj(vec![("timeout_s", Value::Int(45))]);
+        assert_eq!(verify_timeout(&asked, &dir, false).0, Duration::from_secs(45));
+        let huge = crate::canon::obj(vec![("timeout_s", Value::Int(99_999))]);
+        assert_eq!(verify_timeout(&huge, &dir, true).0, Duration::from_secs(harness::MAX_JOB_TIMEOUT_S));
+        // The reply carries the limit it ran with, and the note when capped.
+        let root = ("project_root", Value::string(dir.display().to_string()));
+        let cmd = ("test_cmd", Value::Array(harness::no_op_cmd().into_iter().map(Value::String).collect()));
+        let reply = call("verify_step", &crate::canon::obj(vec![root.clone(), cmd.clone()]), &dir, None, false).unwrap();
+        assert_eq!(crate::canon::get(&reply, "timeout_s").and_then(crate::canon::as_i64), Some(600));
+        assert!(crate::canon::get(&reply, "timeout_note").is_some());
+        // Outside the MCP server a background job could not outlive the call.
+        if !crate::jobs::enabled() {
+            let err = call("verify_step", &crate::canon::obj(vec![root, cmd, ("background", Value::Bool(true))]), &dir, None, false).unwrap_err();
+            assert_eq!(err.code, "background_unavailable");
+            assert!(err.hint.contains("trammel mcp"));
+        }
+        crate::workspace::forget(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_files_argument_reaches_the_planner() {
+        let dir = std::env::temp_dir().join(format!("trammel-files-arg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("pkg")).unwrap();
+        std::fs::write(dir.join("pkg/models.py"), "class Item:\n    pass\n").unwrap();
+        std::fs::write(dir.join("pkg/store.py"), "from pkg.models import Item\n\nclass Store:\n    pass\n").unwrap();
+        std::fs::write(dir.join("pkg/other.py"), "def other():\n    return 1\n").unwrap();
+        let args = crate::canon::obj(vec![
+            ("project_root", Value::string(dir.display().to_string())),
+            ("goal", Value::string("rework it")),
+            ("files", Value::Array(vec![Value::string("pkg/store.py")])),
+        ]);
+        let reply = call("decompose", &args, &dir, Some(&dir.join(".trammel")), false).unwrap();
+        let text = crate::canon::stable(&reply);
+        assert!(text.contains(r#""named_files":["pkg/store.py"]"#), "{text}");
+        assert!(text.contains(r#""role":"named""#) && text.contains(r#""role":"dependency""#), "{text}");
+        assert!(!text.contains("other.py"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn status_returns_without_relocking_the_store() {
         let dir = std::env::temp_dir().join(format!("trammel-status-lock-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -605,7 +712,7 @@ pub fn surface(name: &str) -> &'static str {
 }
 
 pub fn hints(name: &str) -> (bool, bool, bool, bool) {
-    let read_only = matches!(name, "decompose" | "explore" | "get_plan" | "resume" | "get_recipe" | "list_recipes" | "list_strategies" | "get_constraints" | "status" | "estimate" | "usage_stats" | "history" | "list_plans" | "failure_history" | "available_steps" | "export_plan" | "validate_recipes");
+    let read_only = matches!(name, "job_status" | "decompose" | "explore" | "get_plan" | "resume" | "get_recipe" | "list_recipes" | "list_strategies" | "get_constraints" | "status" | "estimate" | "usage_stats" | "history" | "list_plans" | "failure_history" | "available_steps" | "export_plan" | "validate_recipes");
     let _ = ProjectConfig::default();
     (read_only, !read_only, false, false)
 }

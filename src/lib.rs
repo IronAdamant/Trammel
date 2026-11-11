@@ -27,6 +27,8 @@ pub mod syntax;
 pub mod tools;
 pub mod topo;
 pub mod walk;
+pub mod workspace;
+pub mod jobs;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SCHEMA_VERSION: &str = "4.0.0";

@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 pub const GROUPS: &[(&str, &[&str])] = &[
     ("core", &["start_plan", "decompose", "get_plan", "resume", "complete_plan", "status"]),
     ("plan", &["explore", "list_plans", "update_plan_status", "merge_plans", "export_plan", "record_steps", "history", "estimate", "list_strategies"]),
-    ("verify", &["verify_step", "verify_plan"]),
+    ("verify", &["verify_step", "verify_plan", "job_status", "cancel_job"]),
     ("recipes", &["save_recipe", "get_recipe", "list_recipes"]),
     ("constraints", &["add_constraint", "get_constraints", "deactivate_constraint", "resolve_failure", "failure_history"]),
     ("locks", &["claim_step", "release_step", "available_steps"]),

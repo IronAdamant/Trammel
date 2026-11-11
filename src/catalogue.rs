@@ -12,7 +12,8 @@ type Param = (&'static str, &'static str, bool, &'static str);
 const ROOT: Param = ("project_root", "string", false, "Project directory. Default: the server's working directory.");
 
 const PLAN: &[Param] = &[
-    ("goal", "string", true, "What to change, in plain words. Name files or symbols when you know them."),
+    ("goal", "string", true, "What to change, in plain words. Name the files when you know them (paths, file names such as game.rs, `module` names, crate::paths): the plan starts from those."),
+    ("files", "string[]", false, "Files to plan from, relative to project_root. Added to the files the goal names."),
     ("scope", "string", false, "Subdirectory to analyze, relative to project_root."),
     ("language", "string", false, "Override detection: python, typescript, javascript, go, rust, cpp, c, java, kotlin, csharp, ruby, php, swift, dart, zig."),
     ("focus_keywords", "string[]", false, "Extra words that mark files as relevant."),
@@ -37,6 +38,7 @@ const VERIFY: &[Param] = &[
     ("test_cmd", "cmd", false, "Test command as a string or argv array. Default: .trammel.json test_cmd, else the language default (python -m unittest, cargo test, npm test, go test ./...)."),
     ("language", "string", false, "Override language detection for the default test command."),
     ("full_output", "boolean", false, "Return the whole test output instead of 4 KB head and tail."),
+    ("timeout_s", "number", false, "Seconds the test command may run. Default: verify_timeout_s in .trammel.json, else 300. A call that waits is capped at 600; with background: true, 3600."),
 ];
 
 struct Tool {
@@ -47,9 +49,9 @@ struct Tool {
 }
 
 const TOOLS: &[Tool] = &[
-    Tool { name: "start_plan", description: "Plan a multi-file change and save it. Returns dependency-ordered file steps plus plan_id; later sessions and other agents continue it with get_plan. Same options as decompose.",
+    Tool { name: "start_plan", description: "Plan a change that spans several files and save it. Use it when the files must change in dependency order, or when another agent or a later session will continue the work (get_plan, add_note). Skip it for a one- or two-file edit you can make now. Name the files in the goal or pass files: the plan starts from them, adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests, each step with a role. Without named files it ranks the whole repo by goal words (15 files). Returns plan_id.",
         params: &[("persist", "boolean", false, "Default true. false returns the plan without saving it."), ("strategy", "string", false, "Strategy name to record on the saved plan."), FULL], extra: &[PLAN] },
-    Tool { name: "decompose", description: "Plan a change without saving: files in dependency order with goal relevance. Read-only. full: true adds symbols and the import graph.",
+    Tool { name: "decompose", description: "Plan a change without saving it: which files it touches and in what order (dependencies first, tests last), with goal relevance and each file's role (named, dependency, dependent, test). Read-only. Same options as start_plan. Not worth it for a single-file fix. full: true adds symbols and the import graph.",
         params: &[FULL], extra: &[PLAN] },
     Tool { name: "explore", description: "Plan a change and return num_beams alternative step orderings (bottom_up, top_down, ...). Read-only.",
         params: &[], extra: &[PLAN] },
@@ -71,9 +73,13 @@ const TOOLS: &[Tool] = &[
         params: &[("plan_a_id", "integer", true, "First plan id."), ("plan_b_id", "integer", true, "Second plan id."), ("strategy", "sequential|interleave", false, "Default sequential.")], extra: &[] },
     Tool { name: "export_plan", description: "Return a saved plan as a trammel.plan document, and write it to path when given.",
         params: &[PLAN_ID, ("path", "string", false, "File to write the JSON to.")], extra: &[] },
-    Tool { name: "verify_step", description: "Apply edits to a temporary copy of the project, check bracket balance, and run the tests there. The real tree is never touched. Unbalanced brackets fail at once with line numbers; otherwise success is the test result. Output capped at 4 KB, 60 s limit.",
-        params: &[("edits", "edits", false, "Files to write in the copy: [{path, content}], content is the whole new file.")], extra: &[VERIFY] },
-    Tool { name: "verify_plan", description: "Run verify_step for each step of a saved plan that carries file content, in order, stopping at the first failure. Steps without content count as done.",
+    Tool { name: "verify_step", description: "Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, or when other agents share your working tree; if you can just run the tests yourself, do that. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. Unbalanced brackets fail at once with line numbers. A timeout answers timed_out with elapsed_s and how to raise timeout_s. Long runs: background: true returns a job_id at once; poll job_status. Output capped at 4 KB.",
+        params: &[("edits", "edits", false, "Files to write in the copy: [{path, content}], content is the whole new file."), ("background", "boolean", false, "Return a job_id at once and run in the background (up to 3600 s); read the result with job_status. Needs the MCP server.")], extra: &[VERIFY] },
+    Tool { name: "job_status", description: "State of a verify_step background job: running (with elapsed_s), completed or cancelled (with the verify result), or not_found. wait_s waits here, up to 600 s, for it to finish.",
+        params: &[("job_id", "string", true, "Id from verify_step with background: true."), ("wait_s", "number", false, "Seconds to wait for the job to finish before answering. Default 0, at most 600.")], extra: &[] },
+    Tool { name: "cancel_job", description: "Stop a running verify_step background job; its test command is killed. job_status then returns the cancelled result.",
+        params: &[("job_id", "string", true, "Id from verify_step with background: true.")], extra: &[] },
+    Tool { name: "verify_plan", description: "Run verify_step for each step of a saved plan that carries file content, in order, stopping at the first failure. Steps without content count as done. The whole call stops after 600 s with timed_out.",
         params: &[PLAN_ID], extra: &[VERIFY] },
     Tool { name: "record_steps", description: "Set the status of plan steps, e.g. after verify_step passes. Unknown ids are listed in not_found.",
         params: &[("steps", "steps", true, "[{step_id, status}]. step_id is the step `id` from get_plan. Status: pending, running, passed, failed or skipped.")], extra: &[] },
@@ -230,6 +236,7 @@ mod tests {
             want.sort();
             assert_eq!(asked, want, "{name}");
         }
+        crate::workspace::forget(&dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
