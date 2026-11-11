@@ -385,7 +385,7 @@ fn verify_timeout(args: &Value, root: &Path, background: bool) -> (Duration, Opt
 
 fn verify_step(args: &Value, fallback: &Path) -> Result<Value, Failure> {
     let root = arg_path(args, "project_root").unwrap_or_else(|| fallback.to_path_buf());
-    let edits = edits_of(args);
+    let edits = edits_of(args)?;
     let full = crate::canon::get(args, "full_output").and_then(crate::canon::as_bool).unwrap_or(false);
     let background = crate::canon::get(args, "background").and_then(crate::canon::as_bool).unwrap_or(false);
     if background && !crate::jobs::enabled() {
@@ -501,14 +501,22 @@ fn usage(store: &Store) -> Result<Value, Failure> {
     Ok(crate::canon::obj(vec![("enabled", Value::Bool(true)), ("events", Value::Int(n as i64))]))
 }
 
-fn edits_of(args: &Value) -> Vec<(String, String)> {
-    crate::canon::get(args, "edits").and_then(crate::canon::as_array).map(|items| {
-        items.iter().filter_map(|item| {
-            let path = crate::canon::get(item, "path").or_else(|| crate::canon::get(item, "file")).and_then(crate::canon::as_str)?;
-            let content = crate::canon::get(item, "content").and_then(crate::canon::as_str).unwrap_or("");
-            Some((path.to_string(), content.to_string()))
-        }).collect()
-    }).unwrap_or_default()
+/// `edits` as (path, content). An edit without a string path, or whose
+/// content is not a string, is refused: writing it as an empty file would
+/// fail the tests for a reason the caller cannot see.
+fn edits_of(args: &Value) -> Result<Vec<(String, String)>, Failure> {
+    let Some(items) = crate::canon::get(args, "edits").and_then(crate::canon::as_array) else { return Ok(Vec::new()) };
+    let mut out = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let path = crate::canon::get(item, "path").or_else(|| crate::canon::get(item, "file")).and_then(crate::canon::as_str)
+            .ok_or_else(|| Failure::new("bad_edit", format!("edits[{i}] has no string path"), "Each edit is {path, content} with path relative to project_root"))?;
+        let content = match crate::canon::get(item, "content") {
+            None => "",
+            Some(value) => crate::canon::as_str(value).ok_or_else(|| Failure::new("bad_edit", format!("edits[{i}] ({path}): content is not a string"), "Pass the whole new file text as a JSON string"))?,
+        };
+        out.push((path.to_string(), content.to_string()));
+    }
+    Ok(out)
 }
 
 fn string_list(args: &Value, key: &str) -> Vec<String> {
@@ -655,6 +663,11 @@ mod tests {
         let reply = call("verify_step", &crate::canon::obj(vec![root.clone(), cmd.clone()]), &dir, None, false).unwrap();
         assert_eq!(crate::canon::get(&reply, "timeout_s").and_then(crate::canon::as_i64), Some(600));
         assert!(crate::canon::get(&reply, "timeout_note").is_some());
+        // An edit whose content is not text is refused, not written empty.
+        let bad = crate::canon::obj(vec![root.clone(), cmd.clone(), ("edits", Value::Array(vec![crate::canon::obj(vec![("path", Value::string("a.rs")), ("content", crate::canon::obj(vec![("value", Value::string("fn main() {}"))]))])]))]);
+        let err = call("verify_step", &bad, &dir, None, false).unwrap_err();
+        assert_eq!(err.code, "bad_edit");
+        assert!(err.message.contains("a.rs") && err.message.contains("not a string"), "{}", err.message);
         // Outside the MCP server a background job could not outlive the call.
         if !crate::jobs::enabled() {
             let err = call("verify_step", &crate::canon::obj(vec![root, cmd, ("background", Value::Bool(true))]), &dir, None, false).unwrap_err();

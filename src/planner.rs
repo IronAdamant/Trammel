@@ -1094,7 +1094,7 @@ mod named_tests {
     fn path_words_feed_keywords_but_not_anchors() {
         assert_eq!(goal::keyword_text("fix crates/specula/src/sight.rs."), "fix  specula sight .");
         assert_eq!(goal::anchor_text("fix crates/specula/src/sight.rs and game.rs").split_whitespace().collect::<Vec<_>>(), vec!["fix", "specula", "and"]);
-        let refs = goal::named_refs("edit `sight` and the timeline module, specula::game::Ctx, game.rs, and src/a/b.py.");
+        let refs = goal::named_refs("edit `sight` and the timeline module (not the test file), specula::game::Ctx, game.rs, and src/a/b.py.");
         assert_eq!(refs.paths, vec!["src/a/b.py", "game.rs"]);
         assert_eq!(refs.stems, vec!["sight", "timeline"]);
         assert!(refs.modules.contains(&vec!["specula".to_string(), "game".to_string(), "Ctx".to_string()]));

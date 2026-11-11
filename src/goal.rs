@@ -163,7 +163,9 @@ pub fn named_refs(goal: &str) -> NamedRefs {
         let w = word.trim().to_string();
         let ok = w.len() > 1 && w.chars().all(is_word_char) && w.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false);
         let lower = w.to_lowercase();
-        if ok && !STOP.contains(&lower.as_str()) && !ARTICLES.contains(&lower.as_str()) && !CREATION.contains(&lower.as_str()) && !FILE_NOUNS.contains(&lower.as_str()) && !stems.contains(&w) {
+        // "the test file", "a source file": words that name no particular file.
+        const VAGUE: &[&str] = &["test", "tests", "source", "code", "data", "project", "target", "config", "rust", "python", "main", "lib"];
+        if ok && !VAGUE.contains(&lower.as_str()) && !STOP.contains(&lower.as_str()) && !ARTICLES.contains(&lower.as_str()) && !CREATION.contains(&lower.as_str()) && !FILE_NOUNS.contains(&lower.as_str()) && !stems.contains(&w) {
             stems.push(w);
         }
     };
