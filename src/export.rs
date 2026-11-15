@@ -25,13 +25,19 @@ pub fn from_plan(plan: &Value) -> Value {
     ])
 }
 
+/// One exported step. `id` and `verification` (the last verify_step run,
+/// 4.5) are added when the step has them.
 fn normalize(step: &Value, index: usize) -> Value {
-    canon::obj(vec![
+    let mut out = canon::obj(vec![
         ("step_index", canon::get(step, "step_index").cloned().unwrap_or(Value::Int(index as i64))),
         ("description", canon::get(step, "description").cloned().unwrap_or(Value::string(""))),
         ("rationale", canon::get(step, "rationale").cloned().unwrap_or(Value::string(""))),
         ("depends_on", canon::get(step, "depends_on").cloned().unwrap_or(Value::Array(vec![]))),
         ("status", canon::get(step, "status").cloned().unwrap_or(Value::string("pending"))),
         ("file", canon::get(step, "file").cloned().unwrap_or(Value::Null)),
-    ])
+    ]);
+    for key in ["id", "verification"] {
+        if let Some(value) = canon::get(step, key).filter(|v| !matches!(v, Value::Null)) { canon::insert(&mut out, key, value.clone()); }
+    }
+    out
 }

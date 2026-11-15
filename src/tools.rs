@@ -70,7 +70,9 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
             if name == "history" { return Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("trajectories", Value::Array(store.trajectories(id)))])); }
             let plan = lean_plan(plan);
-            Ok(if wants_full(args) { plan } else { compact_plan(&plan) })
+            let mut reply = if wants_full(args) { plan.clone() } else { compact_plan(&plan) };
+            if name == "resume" { point_at_next(&mut reply, &plan); }
+            Ok(reply)
         }
         "list_plans" => {
             if crate::canon::get(args, "db_path").is_some() {
@@ -215,14 +217,14 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             Ok(Value::Array(store.unwrap().available(plan, &agent)))
         }
         "merge_plans" => merge(args, store.unwrap()),
-        "verify_step" => verify_step(args, root),
+        "verify_step" => verify_step(args, root, store_path, None),
         "job_status" => {
             let id = required_str(args, "job_id")?;
             let wait = crate::canon::get(args, "wait_s").and_then(crate::canon::as_f64).unwrap_or(0.0);
             Ok(crate::jobs::status(&id, wait))
         }
         "cancel_job" => Ok(crate::jobs::cancel(&required_str(args, "job_id")?)),
-        "verify_plan" => verify_plan(args, root, store.unwrap()),
+        "verify_plan" => verify_plan(args, root, store_path, store.unwrap()),
         "export_plan" => export_plan(args, store.unwrap()),
         other => Err(Failure::new("unknown_tool", format!("unknown tool {other}"), "Call tools/list")),
     }
@@ -310,7 +312,7 @@ fn compact_strategy(full: &Value) -> Value {
 fn compact_plan(plan: &Value) -> Value {
     let mut out = pick(plan, &["id", "goal", "status", "current_step", "total_steps", "created", "updated"]);
     let steps: Vec<Value> = crate::canon::get(plan, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
-        .map(|s| pick(s, &["id", "step_index", "file", "role", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at"]))
+        .map(|s| pick(s, &["id", "step_index", "file", "role", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at", "verification"]))
         .collect();
     crate::canon::insert(&mut out, "steps", Value::Array(steps));
     crate::canon::insert(&mut out, "notes", crate::canon::get(plan, "notes").cloned().unwrap_or(Value::Array(vec![])));
@@ -383,13 +385,34 @@ fn verify_timeout(args: &Value, root: &Path, background: bool) -> (Duration, Opt
     (Duration::from_secs(secs), note)
 }
 
-fn verify_step(args: &Value, fallback: &Path) -> Result<Value, Failure> {
+fn verify_step(args: &Value, fallback: &Path, store_path: &Path, held: Option<&mut Store>) -> Result<Value, Failure> {
     let root = arg_path(args, "project_root").unwrap_or_else(|| fallback.to_path_buf());
     let edits = edits_of(args)?;
     let full = crate::canon::get(args, "full_output").and_then(crate::canon::as_bool).unwrap_or(false);
     let background = crate::canon::get(args, "background").and_then(crate::canon::as_bool).unwrap_or(false);
     if background && !crate::jobs::enabled() {
         return Err(Failure::new("background_unavailable", "background jobs need the MCP server; this process exits after one call", "Drop background (the CLI waits for the result), or call verify_step through trammel mcp"));
+    }
+    let git_ref = match crate::canon::get(args, "ref") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) => Some(name.clone()),
+        Some(_) => return Err(Failure::new("bad_argument", "ref must be a string", "Pass ref as a branch, tag or commit id, e.g. \"HEAD\"")),
+    };
+    let link = plan_link(args)?;
+    let mut held = held;
+    if let Some((plan, step)) = link {
+        let known = match held.as_deref_mut() {
+            Some(store) => (store.get_plan(plan).is_some(), store.has_step(plan, step)),
+            None => {
+                let store = Store::open(store_path).map_err(|e| Failure::new("store", e, "Check that the store directory is writable"))?;
+                (store.get_plan(plan).is_some(), store.has_step(plan, step))
+            }
+        };
+        match known {
+            (false, _) => return Err(Failure::new("plan_not_found", format!("plan {plan} was not found"), "Call list_plans for valid plan ids")),
+            (true, false) => return Err(Failure::new("step_not_found", format!("step {step} is not a step of plan {plan}"), "step_id is the step `id` from get_plan or resume, not step_index")),
+            _ => {}
+        }
     }
     // Only work out a test command when it will run: a failed preflight
     // answers at once, and an explicit or configured command needs no
@@ -404,19 +427,136 @@ fn verify_step(args: &Value, fallback: &Path) -> Result<Value, Failure> {
         }
     };
     let (timeout, note) = verify_timeout(args, &root, background);
-    let request = VerifyRequest { edits, full_output: full, ..VerifyRequest::new(root, test_cmd, timeout) };
+    let mut request = VerifyRequest { edits, full_output: full, git_ref, ..VerifyRequest::new(root, test_cmd, timeout) };
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if background {
+        if !crate::jobs::has_room() { return Err(too_many_jobs(format!("{} verify jobs are already running", crate::jobs::MAX_RUNNING))); }
+        request.cancel = Some(std::sync::Arc::clone(&cancel));
+    }
+    // The copy is made here, also for a background run, so a bad ref or a
+    // copy too deep for Windows is an error now rather than a job result.
+    let stage = harness::prepare(&request).map_err(|r| Failure::new(r.code, r.message, r.hint))?;
     let mut reply = if background {
-        crate::jobs::start(request).map_err(|e| Failure::new("too_many_jobs", e, "Wait for a job with job_status, or stop one with cancel_job"))?
+        let store_path = store_path.to_path_buf();
+        crate::jobs::start(timeout.as_secs(), cancel, move || {
+            let mut verdict = harness::finish(stage, &request);
+            if let Some((plan, step)) = link { record_on_step(None, &store_path, plan, step, &mut verdict, &request); }
+            verdict
+        }).map_err(too_many_jobs)?
     } else {
-        harness::verify(&request)
+        let mut verdict = harness::finish(stage, &request);
+        if let Some((plan, step)) = link { record_on_step(held, store_path, plan, step, &mut verdict, &request); }
+        verdict
     };
     if let Some(note) = note { crate::canon::insert(&mut reply, "timeout_note", Value::string(note)); }
     Ok(reply)
 }
 
+fn too_many_jobs(message: String) -> Failure {
+    Failure::new("too_many_jobs", message, "Wait for a job with job_status, or stop one with cancel_job")
+}
+
+/// `plan_id` and `step_id` together, or neither.
+fn plan_link(args: &Value) -> Result<Option<(i64, i64)>, Failure> {
+    let plan = crate::canon::get(args, "plan_id").filter(|v| !matches!(v, Value::Null));
+    let step = crate::canon::get(args, "step_id").filter(|v| !matches!(v, Value::Null));
+    match (plan, step) {
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(Failure::new("missing_argument", "step_id is required with plan_id", "Pass step_id (the step `id` from get_plan or resume) to store the outcome on that step, or leave out plan_id")),
+        (None, Some(_)) => Err(Failure::new("missing_argument", "plan_id is required with step_id", "Pass plan_id (from start_plan or list_plans) with step_id, or leave out step_id")),
+        (Some(p), Some(s)) => match (crate::canon::as_i64(p), crate::canon::as_i64(s)) {
+            (Some(p), Some(s)) => Ok(Some((p, s))),
+            _ => Err(Failure::new("bad_argument", "plan_id and step_id must be integers", "Pass the plan's id and the step's `id` from get_plan")),
+        },
+    }
+}
+
+/// Characters of a failure kept on a plan step.
+const STEP_EXCERPT: usize = 300;
+
+/// What a plan step keeps of a verify_step run: passed or not, the command,
+/// what was verified (working tree or commit), when, and for a failure a
+/// short excerpt.
+fn verification_record(reply: &Value, request: &VerifyRequest) -> Value {
+    let passed = crate::canon::get(reply, "success").and_then(crate::canon::as_bool) == Some(true);
+    let commit = crate::canon::get(reply, "commit").cloned();
+    let source = if commit.is_some() || request.git_ref.is_some() { "commit" } else { "working_tree" };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    let mut out = crate::canon::obj(vec![
+        ("passed", Value::Bool(passed)),
+        ("command", Value::string(request.test_cmd.join(" "))),
+        ("source", Value::string(source)),
+        ("at", Value::Float(now)),
+    ]);
+    if let Some(commit) = commit { crate::canon::insert(&mut out, "commit", commit); }
+    if let Some(name) = &request.git_ref { crate::canon::insert(&mut out, "ref", Value::string(name.clone())); }
+    if let Some(elapsed) = crate::canon::get(reply, "elapsed_s") { crate::canon::insert(&mut out, "elapsed_s", elapsed.clone()); }
+    if !passed { crate::canon::insert(&mut out, "excerpt", Value::string(failure_excerpt(reply))); }
+    out
+}
+
+fn failure_excerpt(reply: &Value) -> String {
+    let text = |key: &str| crate::canon::get(reply, key).and_then(crate::canon::as_str).unwrap_or("").to_string();
+    let cut = |line: String| if line.chars().count() > STEP_EXCERPT { format!("{}…", line.chars().take(STEP_EXCERPT - 1).collect::<String>()) } else { line };
+    if let Some(Value::Array(tests)) = crate::canon::get(reply, "failed_tests") {
+        if let Some(first) = tests.first() {
+            let name = crate::canon::get(first, "name").and_then(crate::canon::as_str).unwrap_or("");
+            let excerpt = crate::canon::get(first, "excerpt").and_then(crate::canon::as_str).unwrap_or("");
+            let more = tests.len() - 1 + crate::canon::get(reply, "failed_tests_more").and_then(crate::canon::as_i64).unwrap_or(0) as usize;
+            let tail = if more > 0 { format!(" (+{more} more failed)") } else { String::new() };
+            return cut(format!("{name}: {}{tail}", excerpt.replace('\n', " | ")));
+        }
+    }
+    if crate::canon::get(reply, "timed_out").and_then(crate::canon::as_bool) == Some(true) {
+        return format!("timed out after {}s", crate::canon::get(reply, "timeout_s").and_then(crate::canon::as_i64).unwrap_or(0));
+    }
+    if let Some(Value::Array(issues)) = crate::canon::get(reply, "preflight").and_then(|p| crate::canon::get(p, "issues")) {
+        if !issues.is_empty() {
+            return cut(format!("preflight: {}", issues.iter().filter_map(crate::canon::as_str).collect::<Vec<_>>().join(" | ")));
+        }
+    }
+    crate::testfail::summary(&format!("{}\n{}", text("output"), text("trace")), STEP_EXCERPT)
+}
+
+/// Store the run on the plan step and say so in the reply (`recorded`), or
+/// say why it could not be stored (`record_error`).
+fn record_on_step(held: Option<&mut Store>, store_path: &Path, plan: i64, step: i64, reply: &mut Value, request: &VerifyRequest) {
+    let record = verification_record(reply, request);
+    let stored = match held {
+        Some(store) => Ok(store.record_verification(plan, step, record)),
+        None => Store::open(store_path).and_then(|mut store| {
+            let ok = store.record_verification(plan, step, record);
+            store.save().map(|_| ok)
+        }),
+    };
+    match stored {
+        Ok(true) => crate::canon::insert(reply, "recorded", crate::canon::obj(vec![("plan_id", Value::Int(plan)), ("step_id", Value::Int(step))])),
+        Ok(false) => crate::canon::insert(reply, "record_error", Value::string(format!("step {step} of plan {plan} is gone; the outcome was not stored"))),
+        Err(err) => crate::canon::insert(reply, "record_error", Value::string(format!("the outcome was not stored: {err}"))),
+    }
+}
+
+/// resume: the first step without a passing verify_step (and not passed or
+/// skipped), so a later session knows where to pick up.
+fn point_at_next(reply: &mut Value, plan: &Value) {
+    let steps = crate::canon::get(plan, "steps").and_then(crate::canon::as_array).unwrap_or(&[]);
+    match crate::store::next_unverified(steps) {
+        Some(step) => {
+            let next = pick(step, &["id", "step_index", "file", "description", "status", "verification"]);
+            let id = crate::canon::get(step, "id").and_then(crate::canon::as_i64).unwrap_or(0);
+            crate::canon::insert(reply, "next_step", next);
+            crate::canon::insert(reply, "next", Value::string(format!("Work on step {id}, then verify_step with plan_id and step_id {id} to store the outcome on it")));
+        }
+        None => {
+            crate::canon::insert(reply, "next_step", Value::Null);
+            crate::canon::insert(reply, "next", Value::string("Every step has a passing verify_step or is passed or skipped; call complete_plan"));
+        }
+    }
+}
+
 /// verify_step for each step with content, in order. The whole call stays
 /// within 600 s: each step gets what is left of that budget at most.
-fn verify_plan(args: &Value, fallback: &Path, store: &mut Store) -> Result<Value, Failure> {
+fn verify_plan(args: &Value, fallback: &Path, store_path: &Path, store: &mut Store) -> Result<Value, Failure> {
     let id = required_i64(args, "plan_id")?;
     let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
     let steps = crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).map(|items| items.to_vec()).unwrap_or_default();
@@ -442,7 +582,9 @@ fn verify_plan(args: &Value, fallback: &Path, store: &mut Store) -> Result<Value
             crate::canon::insert(&mut one, "edits", Value::Array(vec![crate::canon::obj(vec![("path", Value::string(file)), ("content", Value::string(content))])]));
             crate::canon::insert(&mut one, "timeout_s", Value::Int(per_step.min(left).as_secs() as i64));
             crate::canon::insert(&mut one, "background", Value::Bool(false));
-            let verdict = verify_step(&one, fallback)?;
+            // Each step's outcome is stored on it, as verify_step does.
+            if let Some(id) = crate::canon::get(step, "id").cloned() { crate::canon::insert(&mut one, "step_id", id); }
+            let verdict = verify_step(&one, fallback, store_path, Some(&mut *store))?;
             if crate::canon::get(&verdict, "success").and_then(crate::canon::as_bool) != Some(true) {
                 return Ok(crate::canon::obj(vec![("success", Value::Bool(false)), ("steps_completed", Value::Int(completed)), ("failed_step", step.clone()), ("verdict", verdict)]));
             }

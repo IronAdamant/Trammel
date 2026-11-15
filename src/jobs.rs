@@ -43,12 +43,16 @@ pub fn enabled() -> bool {
     SERVER.load(Ordering::Relaxed)
 }
 
-/// Start `request` on its own thread. Err(reason) when too many run.
-pub fn start(mut request: VerifyRequest) -> Result<Value, String> {
+/// True while fewer than `MAX_RUNNING` jobs run, so a caller can refuse
+/// before it prepares a copy.
+pub fn has_room() -> bool {
+    jobs().lock().map(|all| all.iter().filter(|j| j.result.is_none()).count() < MAX_RUNNING).unwrap_or(false)
+}
+
+/// Run `work` on its own thread as a job. `cancel` is the flag the work
+/// watches (the verify request's). Err(reason) when too many run.
+pub fn start(timeout_s: u64, cancel: Arc<AtomicBool>, work: impl FnOnce() -> Value + Send + 'static) -> Result<Value, String> {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    let cancel = Arc::new(AtomicBool::new(false));
-    request.cancel = Some(Arc::clone(&cancel));
-    let timeout_s = request.timeout.as_secs();
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let id = format!("verify-{stamp}-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     {
@@ -61,7 +65,7 @@ pub fn start(mut request: VerifyRequest) -> Result<Value, String> {
     }
     let thread_id = id.clone();
     std::thread::spawn(move || {
-        let verdict = harness::verify(&request);
+        let verdict = work();
         if let Ok(mut all) = jobs().lock() {
             if let Some(job) = all.iter_mut().find(|j| j.id == thread_id) { job.result = Some(verdict); }
             // Drop the oldest finished jobs beyond the limit.
@@ -77,6 +81,14 @@ pub fn start(mut request: VerifyRequest) -> Result<Value, String> {
         ("timeout_s", Value::Int(timeout_s as i64)),
         ("next", Value::string("Call job_status with this job_id; pass wait_s to wait for the result")),
     ]))
+}
+
+/// Start a verify of `request` as a job.
+pub fn start_verify(mut request: VerifyRequest) -> Result<Value, String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    request.cancel = Some(Arc::clone(&cancel));
+    let timeout_s = request.timeout.as_secs();
+    start(timeout_s, cancel, move || harness::verify(&request))
 }
 
 /// The job's state. With `wait_s`, wait up to that long (at most 600 s) for
@@ -142,7 +154,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("trammel-jobs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let started = start(VerifyRequest::new(dir.clone(), harness::no_op_cmd(), Duration::from_secs(30))).unwrap();
+        let started = start_verify(VerifyRequest::new(dir.clone(), harness::no_op_cmd(), Duration::from_secs(30))).unwrap();
         let id = crate::canon::get(&started, "job_id").and_then(crate::canon::as_str).unwrap().to_string();
         assert_eq!(crate::canon::get(&started, "status").and_then(crate::canon::as_str), Some("running"));
         let done = status(&id, 30.0);
@@ -153,7 +165,7 @@ mod tests {
         assert_eq!(crate::canon::get(&status("verify-nope", 0.0), "status").and_then(crate::canon::as_str), Some("not_found"));
         // A slow job: no answer yet without waiting, then cancelled.
         let slow: Vec<String> = if cfg!(windows) { vec!["cmd".into(), "/C".into(), "ping -n 30 127.0.0.1 >nul".into()] } else { vec!["sh".into(), "-c".into(), "sleep 30".into()] };
-        let started = start(VerifyRequest::new(dir.clone(), slow, Duration::from_secs(60))).unwrap();
+        let started = start_verify(VerifyRequest::new(dir.clone(), slow, Duration::from_secs(60))).unwrap();
         let id = crate::canon::get(&started, "job_id").and_then(crate::canon::as_str).unwrap().to_string();
         let now = status(&id, 0.2);
         assert_eq!(crate::canon::get(&now, "status").and_then(crate::canon::as_str), Some("running"), "{}", crate::canon::stable(&now));

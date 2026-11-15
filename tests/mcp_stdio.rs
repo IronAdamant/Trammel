@@ -246,7 +246,9 @@ fn unknown_names_and_core_stop_the_server_with_exit_2() {
 /// 4.2.0 `capabilities.tools.listChanged` true, 4.3.0 the `full` argument
 /// on start_plan, decompose, get_plan, resume and get_recipe; 4.4.0 the
 /// job_status and cancel_job tools, the files, timeout_s and background
-/// arguments, and descriptions that say when a plan helps. Any other
+/// arguments, and descriptions that say when a plan helps; 4.5.0 the ref,
+/// plan_id and step_id arguments of verify_step and the descriptions and
+/// instructions for them (left_behind, copy depth, next_step). Any other
 /// difference fails, so the default surface only changes deliberately.
 #[test]
 fn default_output_matches_the_recorded_golden() {

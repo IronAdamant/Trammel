@@ -4,7 +4,8 @@
 
 use crate::json::Value;
 use crate::lang::brackets::bracket_errors;
-use crate::workspace::Workspace;
+use crate::pathlen::PathLen;
+use crate::workspace::{PrepareError, Source, Workspace};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -32,21 +33,49 @@ pub struct VerifyRequest {
     pub cap: usize,
     /// Set by `cancel_job`; the test command is killed when it turns true.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// `ref`: run on a clean checkout of this commit instead of the working
+    /// tree.
+    pub git_ref: Option<String>,
 }
 
 impl VerifyRequest {
     pub fn new(root: PathBuf, test_cmd: Vec<String>, timeout: Duration) -> VerifyRequest {
-        VerifyRequest { edits: Vec::new(), root, test_cmd, timeout, full_output: false, cap: DEFAULT_CAP, cancel: None }
+        VerifyRequest { edits: Vec::new(), root, test_cmd, timeout, full_output: false, cap: DEFAULT_CAP, cancel: None, git_ref: None }
     }
 }
 
-pub fn verify(request: &VerifyRequest) -> Value {
+/// A verify that cannot start, as an error for the caller to return.
+#[derive(Debug)]
+pub struct Refusal {
+    pub code: &'static str,
+    pub message: String,
+    pub hint: String,
+}
+
+/// After `prepare`: a reply already (preflight failed, no command, the copy
+/// could not be made), or a copy ready for the test command.
+pub enum Stage {
+    Done(Value),
+    Ready(Box<Ready>),
+}
+
+pub struct Ready {
+    ws: Workspace,
+    static_analysis: Value,
+    preflight: Value,
+    started: Instant,
+    commit: Option<String>,
+}
+
+/// Check the edits, make the copy and write the edits into it. A bad `ref`
+/// and a copy too deep for Windows are refusals.
+pub fn prepare(request: &VerifyRequest) -> Result<Stage, Refusal> {
     let static_analysis = static_analysis(&request.edits);
     let preflight = preflight(&request.edits);
     // An edit with unbalanced brackets cannot pass. Say so now instead of
     // copying the project and running tests that may not even import it.
     if crate::canon::get(&preflight, "ok").and_then(crate::canon::as_bool) == Some(false) {
-        return crate::canon::obj(vec![
+        return Ok(Stage::Done(crate::canon::obj(vec![
             ("success", Value::Bool(false)),
             ("score", Value::Float(0.0)),
             ("output", Value::string("")),
@@ -54,35 +83,96 @@ pub fn verify(request: &VerifyRequest) -> Value {
             ("truncated", Value::Bool(false)),
             ("static_analysis", static_analysis),
             ("preflight", preflight),
-        ]);
+        ])));
     }
     if request.test_cmd.is_empty() {
-        return crate::canon::obj(vec![
+        return Ok(Stage::Done(crate::canon::obj(vec![
             ("success", Value::Bool(false)),
             ("score", Value::Float(0.0)),
             ("trace", Value::string("no test command")),
             ("truncated", Value::Bool(false)),
             ("static_analysis", static_analysis),
             ("preflight", preflight),
-        ]);
+        ])));
     }
     let started = Instant::now();
-    let mut ws = match Workspace::prepare(&request.root) {
+    let commit = match &request.git_ref {
+        None => None,
+        Some(name) => Some(crate::gitref::resolve(&request.root, name).map_err(|message| Refusal {
+            code: "bad_ref",
+            message,
+            hint: "Pass ref as a branch, tag or commit id of the project's repository (e.g. HEAD), or leave it out to verify the working tree".into(),
+        })?),
+    };
+    let source = match &commit { Some(id) => Source::Commit(id.clone()), None => Source::WorkingTree };
+    let mut ws = match Workspace::prepare(&request.root, &source) {
         Ok(ws) => ws,
-        Err(err) => return fail(&err, static_analysis, preflight),
+        Err(PrepareError::PathTooLong { tree, len }) => return Err(too_long(&tree, &len)),
+        Err(PrepareError::Failed(err)) => return Ok(Stage::Done(fail(&err, static_analysis, preflight))),
     };
     for (path, content) in &request.edits {
         if let Err(err) = ws.write_edit(path, content) {
             ws.finish();
-            return fail(&err, static_analysis, preflight);
+            return Ok(Stage::Done(fail(&err, static_analysis, preflight)));
         }
     }
+    Ok(Stage::Ready(Box::new(Ready { ws, static_analysis, preflight, started, commit })))
+}
+
+fn too_long(tree: &Path, len: &PathLen) -> Refusal {
+    Refusal {
+        code: "path_too_long",
+        message: format!(
+            "the verify copy at {} would hold paths of {} characters (deepest: {}); Windows cannot open paths past {} characters, and a build there fails, often with a message about something else",
+            tree.display(), len.longest, len.example, crate::pathlen::WINDOWS_MAX
+        ),
+        hint: "Set TRAMMEL_VERIFY_CACHE to a short directory (for example C:\\tv) in the server's environment, then verify again".into(),
+    }
+}
+
+/// `prepare` then `run`; a refusal becomes a failed reply.
+pub fn verify(request: &VerifyRequest) -> Value {
+    match prepare(request) {
+        Ok(stage) => finish(stage, request),
+        Err(refusal) => crate::canon::obj(vec![
+            ("success", Value::Bool(false)),
+            ("score", Value::Float(0.0)),
+            ("refused", Value::string(refusal.code)),
+            ("trace", Value::string(refusal.message)),
+            ("hint", Value::string(refusal.hint)),
+            ("truncated", Value::Bool(false)),
+        ]),
+    }
+}
+
+/// The reply for a prepared stage: run the tests when there is a copy.
+pub fn finish(stage: Stage, request: &VerifyRequest) -> Value {
+    match stage {
+        Stage::Done(reply) => reply,
+        Stage::Ready(ready) => run(*ready, request),
+    }
+}
+
+fn run(ready: Ready, request: &VerifyRequest) -> Value {
+    let Ready { ws, static_analysis, preflight, started, commit } = ready;
     let mut env: Vec<(&str, PathBuf)> = Vec::new();
     if let Some(target) = &ws.target { env.push(("CARGO_TARGET_DIR", target.clone())); }
     let outcome = run_cmd(&ws.tree, &request.test_cmd, request.timeout, &env, request.cancel.as_deref());
-    let reused = ws.cached_copy();
-    let written = ws.files_written;
+    let left = ws.left_behind();
+    let target = ws.target.clone().unwrap_or_else(|| ws.tree.join("target"));
+    let copy = crate::canon::obj(vec![
+        ("reused", Value::Bool(ws.cached_copy())),
+        ("files_written", Value::Int(ws.files_written as i64)),
+        ("path", Value::string(ws.tree.display().to_string())),
+        ("target", Value::string(target.display().to_string())),
+        ("longest_path", Value::Int(ws.path_len.longest as i64)),
+    ]);
+    let path_warning = (crate::pathlen::classify(ws.path_len.longest, cfg!(windows)) == crate::pathlen::Check::Near).then(|| format!(
+        "the longest path a build would create in the copy is {} characters ({}), near Windows' limit of {}; if a build fails oddly, set TRAMMEL_VERIFY_CACHE to a shorter directory",
+        ws.path_len.longest, ws.path_len.example, crate::pathlen::WINDOWS_MAX
+    ));
     ws.finish();
+    let failed = if outcome.success { Vec::new() } else { crate::testfail::failed_tests(&format!("{}\n{}", outcome.output, outcome.trace)) };
     let (trace, truncated) = cap_text(&outcome.trace, request.cap, request.full_output);
     let (output, out_trunc) = cap_text(&outcome.output, request.cap, request.full_output);
     let mut out = crate::canon::obj(vec![
@@ -93,10 +183,25 @@ pub fn verify(request: &VerifyRequest) -> Value {
         ("truncated", Value::Bool(truncated || out_trunc)),
         ("elapsed_s", Value::Float(crate::canon::py_round(started.elapsed().as_secs_f64(), 1))),
         ("timeout_s", Value::Int(request.timeout.as_secs() as i64)),
-        ("copy", crate::canon::obj(vec![("reused", Value::Bool(reused)), ("files_written", Value::Int(written as i64))])),
+        ("copy", copy),
+        ("source", Value::string(if commit.is_some() { "commit" } else { "working_tree" })),
+        ("left_behind", left.value()),
         ("static_analysis", static_analysis),
         ("preflight", preflight),
     ]);
+    if let Some(id) = commit {
+        crate::canon::insert(&mut out, "commit", Value::string(id));
+        if let Some(name) = &request.git_ref { crate::canon::insert(&mut out, "ref", Value::string(name.clone())); }
+    }
+    if let Some(warning) = path_warning { crate::canon::insert(&mut out, "path_warning", Value::string(warning)); }
+    if !failed.is_empty() {
+        let total = failed.len();
+        let listed: Vec<Value> = failed.into_iter().take(crate::testfail::MAX_TESTS)
+            .map(|(name, excerpt)| crate::canon::obj(vec![("name", Value::string(name)), ("excerpt", Value::string(excerpt))]))
+            .collect();
+        crate::canon::insert(&mut out, "failed_tests", Value::Array(listed));
+        if total > crate::testfail::MAX_TESTS { crate::canon::insert(&mut out, "failed_tests_more", Value::Int((total - crate::testfail::MAX_TESTS) as i64)); }
+    }
     if outcome.timed_out {
         crate::canon::insert(&mut out, "timed_out", Value::Bool(true));
         crate::canon::insert(&mut out, "hint", Value::string(format!(
@@ -489,9 +594,19 @@ mod tests {
         let first = verify(&VerifyRequest::new(dir.clone(), show.clone(), Duration::from_secs(20)));
         let second = verify(&VerifyRequest::new(dir.clone(), show, Duration::from_secs(20)));
         let target = |v: &Value| crate::canon::get(v, "output").and_then(crate::canon::as_str).unwrap().trim().to_string();
-        assert!(target(&first).ends_with("target"), "{}", crate::canon::stable(&first));
+        assert!(target(&first).ends_with('b'), "{}", crate::canon::stable(&first));
         assert_eq!(target(&first), target(&second), "the same target dir both times");
-        assert_eq!(crate::canon::stable(crate::canon::get(&second, "copy").unwrap()), r#"{"files_written":0,"reused":true}"#);
+        let copy = crate::canon::get(&second, "copy").unwrap();
+        assert_eq!(crate::canon::get(copy, "files_written").and_then(crate::canon::as_i64), Some(0));
+        assert_eq!(crate::canon::get(copy, "reused").and_then(crate::canon::as_bool), Some(true));
+        // The reply says where the copy is and how deep a build goes in it.
+        let path = crate::canon::get(copy, "path").and_then(crate::canon::as_str).unwrap();
+        assert_eq!(crate::canon::get(copy, "target").and_then(crate::canon::as_str), Some(target(&second).as_str()));
+        let longest = crate::canon::get(copy, "longest_path").and_then(crate::canon::as_i64).unwrap() as usize;
+        let incremental = crate::pathlen::chars(Path::new(&target(&second))) + "/debug/incremental/x-xxxxxxxxxxxxx/s-xxxxxxxxxx-xxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxxx/xxxxxxxxxxxxxxxxxxxxxxxxx.pre-lto.bc".len();
+        assert_eq!(longest, incremental, "a cargo project counts cargo's incremental files ({path})");
+        assert_eq!(crate::canon::stable(crate::canon::get(&second, "left_behind").unwrap()), r#"{"created":0,"deleted":0,"modified":0}"#);
+        assert_eq!(crate::canon::get(&second, "source").and_then(crate::canon::as_str), Some("working_tree"));
         crate::workspace::forget(&dir);
         let _ = fs::remove_dir_all(&dir);
     }
