@@ -983,8 +983,9 @@ mod named_tests {
         std::fs::write(path, text).unwrap();
     }
 
-    /// A Rust workspace shaped like Specula's timeline lane: the goal names
-    /// sight.rs and game.rs, and many unrelated tool modules exist.
+    /// A Rust workspace shaped like a timeline lane in a real multi-crate
+    /// project: the goal names sight.rs and game.rs, and many unrelated
+    /// tool modules exist.
     fn workspace(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("trammel-named-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1092,11 +1093,11 @@ mod named_tests {
 
     #[test]
     fn path_words_feed_keywords_but_not_anchors() {
-        assert_eq!(goal::keyword_text("fix crates/specula/src/sight.rs."), "fix  specula sight .");
-        assert_eq!(goal::anchor_text("fix crates/specula/src/sight.rs and game.rs").split_whitespace().collect::<Vec<_>>(), vec!["fix", "specula", "and"]);
-        let refs = goal::named_refs("edit `sight` and the timeline module (not the test file), specula::game::Ctx, game.rs, and src/a/b.py.");
+        assert_eq!(goal::keyword_text("fix crates/engine/src/sight.rs."), "fix  engine sight .");
+        assert_eq!(goal::anchor_text("fix crates/engine/src/sight.rs and game.rs").split_whitespace().collect::<Vec<_>>(), vec!["fix", "engine", "and"]);
+        let refs = goal::named_refs("edit `sight` and the timeline module (not the test file), engine::game::Ctx, game.rs, and src/a/b.py.");
         assert_eq!(refs.paths, vec!["src/a/b.py", "game.rs"]);
         assert_eq!(refs.stems, vec!["sight", "timeline"]);
-        assert!(refs.modules.contains(&vec!["specula".to_string(), "game".to_string(), "Ctx".to_string()]));
+        assert!(refs.modules.contains(&vec!["engine".to_string(), "game".to_string(), "Ctx".to_string()]));
     }
 }
