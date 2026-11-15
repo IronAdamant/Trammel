@@ -18,6 +18,17 @@ The old Python package lives on the `python-legacy` branch. Entries below 4.0.0 
 
 ---
 
+## 4.5.0: verify says where it ran and what it left, ref, outcomes on the plan
+
+**Date:** 2026-11-15
+
+- From Specula M5's last pushes. `src/gitref.rs` stages a clean checkout of a commit with a temporary `GIT_INDEX_FILE`, `read-tree` and `checkout-index --stdin --prefix` (the project's index, HEAD and worktrees untouched); `src/workspace.rs` syncs from it like from the working tree, records what it put in the copy and returns `left_behind` after the run (line-ending-only changes marked); `src/pathlen.rs` estimates the deepest build path (copied files, or cargo's incremental objects for the longest crate name) and refuses past Windows' 259 characters; `src/testfail.rs` reads each failed test's message for libtest, unittest, pytest, go test and Jest.
+- The cache layout is now `<temp>/trv/<8 hex>/<N>/t` and `.../b` (was `<temp>/trammel-verify-cache/<16 hex>/slot<N>/tree` and `.../target`). The old directory is pruned by the 14-day rule.
+- `verify_step` takes `plan_id` and `step_id` and stores the outcome on the step (`Store::record_verification`); `resume` adds `next_step`. `harness::verify` is split into `prepare` and `finish` so a background job's copy is made in the call and errors come back at once; `jobs::start` now runs a closure.
+- Tests: `tests/verify_copy.rs` (over MCP: ref against a CRLF checkout, left_behind, plan outcomes and resume, copy depth with the Windows refusal), unit tests in the three new modules and in `workspace.rs`. Goldens re-recorded for the new arguments and descriptions.
+
+---
+
 ## Windows verification, agent-facing MCP fixes, Rust repo checks
 
 **Date:** 2026-11-05
