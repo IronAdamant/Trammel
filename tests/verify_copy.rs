@@ -68,8 +68,9 @@ fn forget(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// The Specula case: a guard passes in a working tree whose file was
-/// rewritten with LF and fails in a fresh checkout that makes it CRLF.
+/// A case from a large Rust workspace: a guard passes in a working tree
+/// whose file was rewritten with LF and fails in a fresh checkout that
+/// makes it CRLF.
 #[test]
 fn ref_verifies_a_clean_checkout_and_the_working_tree_is_untouched() {
     let dir = project("ref");
@@ -114,8 +115,8 @@ fn ref_verifies_a_clean_checkout_and_the_working_tree_is_untouched() {
     forget(&dir);
 }
 
-/// The other Specula case: a check restored a file with CRLF and its own
-/// "restored" line passed. The reply now names it.
+/// The other case from that workspace: a check restored a file with CRLF
+/// and its own "restored" line passed. The reply now names it.
 #[test]
 fn left_behind_names_created_deleted_and_line_ending_only_changes() {
     let dir = project("left");

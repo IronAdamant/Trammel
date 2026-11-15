@@ -353,7 +353,7 @@ mod test_file_tests {
         for path in ["tests/test_file_1.py", "crates/app/tests/game.rs", "src/models_test.go", "web/app.test.ts", "web/app.spec.js", "src/ui/engine_tests.rs", "pkg/conftest.py", "src/tests.rs"] {
             assert!(is_test_file(path), "{path}");
         }
-        for path in ["src/models.py", "crates/specula/src/sight.rs", "src/latest.rs", "src/contest.py", "src/testing_tools.rs"] {
+        for path in ["src/models.py", "crates/app/src/sight.rs", "src/latest.rs", "src/contest.py", "src/testing_tools.rs"] {
             assert!(!is_test_file(path), "{path}");
         }
         assert_eq!(tested_stem("tests/test_models.py"), "models");

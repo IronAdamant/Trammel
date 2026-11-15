@@ -132,8 +132,8 @@ pub const GENERIC_DIRS: &[&str] = &[
 ];
 
 /// What a goal names as files. `paths` are file paths and bare file names
-/// with a code extension (`crates/specula/src/sight.rs`, `game.rs`).
-/// `modules` are Rust paths (`specula::sight`, `crate::game::Ctx`). `stems`
+/// with a code extension (`crates/engine/src/sight.rs`, `game.rs`).
+/// `modules` are Rust paths (`engine::sight`, `crate::game::Ctx`). `stems`
 /// are bare names in backticks or next to "module" / "file" (`sight`, "the
 /// timeline module").
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -196,8 +196,8 @@ fn bare_file_names(goal: &str) -> Vec<String> {
 
 /// The goal with every named path cut to the words it is about: a path's
 /// file stem and its directories other than `GENERIC_DIRS`. Keyword scoring
-/// and anchors use this text, so `crates/specula/src/sight.rs` counts as
-/// "specula sight", not as "crates src".
+/// and anchors use this text, so `crates/engine/src/sight.rs` counts as
+/// "engine sight", not as "crates src".
 pub fn keyword_text(goal: &str) -> String {
     path_words(goal, true)
 }

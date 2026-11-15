@@ -333,11 +333,11 @@ mod tests {
 
     #[test]
     fn paths_expand_groups_and_skip_globs() {
-        let got = paths_in("use crate::{sight::Camera, game::{self, Ctx}, *};\nlet x = specula_core::Json::new();\nfoo(a::b);");
+        let got = paths_in("use crate::{sight::Camera, game::{self, Ctx}, *};\nlet x = engine_core::Json::new();\nfoo(a::b);");
         let text: Vec<String> = got.iter().map(|p| p.join("::")).collect();
         assert!(text.contains(&"crate::sight::Camera".to_string()), "{text:?}");
         assert!(text.contains(&"crate::game".to_string()) && text.contains(&"crate::game::Ctx".to_string()), "{text:?}");
-        assert!(text.contains(&"specula_core::Json::new".to_string()) && text.contains(&"a::b".to_string()), "{text:?}");
+        assert!(text.contains(&"engine_core::Json::new".to_string()) && text.contains(&"a::b".to_string()), "{text:?}");
         assert!(!text.iter().any(|t| t.contains('*')), "{text:?}");
     }
 
