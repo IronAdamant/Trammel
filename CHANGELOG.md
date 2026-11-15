@@ -2,6 +2,10 @@
 
 The old Python version lives on the `python-legacy` branch. Notes below 4.0.0 describe that package. Older Python releases are also in [docs/PYTHON_CHANGELOG.md](docs/PYTHON_CHANGELOG.md) and `LLM_Development.md`.
 
+## 4.5.1 - 2026-11-15
+
+- **A same-size rewrite in the verify copy is no longer missed.** The copy trusted a file whose size and modification time matched its manifest entry. A file written by the sync and rewritten with the same length inside the same clock tick kept an equal stamp, so the next run did not restore it, and `left_behind` did not report it. CI's Windows runner hit this in `a_file_a_test_rewrote_in_the_copy_is_restored` on main after 4.5.0. A stamp is now trusted only when the file's time is more than two seconds older than the moment the stamps were taken (git's racy-timestamp rule); any other file is compared byte for byte. Both the sync and `left_behind` use the rule. An unchanged file is still not rewritten and keeps its time, and only recent files pay for the compare: a file written in one run is read once more in the next, then trusted. The manifest records when its stamps were taken (`#recorded` line); a 4.5.0 manifest without it is compared in full once.
+
 ## 4.5.0 - 2026-11-15
 
 From the end of Specula's M5, where CI failed on what passed locally: a guard matched a line with its line ending and passed in a working tree rewritten with LF, but failed in every fresh Windows checkout (CRLF); a check restored a file with CRLF and was seen only because the chain ended with `git status`; a linker could not open its argument file at 260 characters and blamed a plugin; and CI logs named failed tests without their messages.
