@@ -18,8 +18,8 @@ Give it a goal and a project. It reads the imports and symbols, orders the files
 | Call | What it saves the agent |
 |---|---|
 | `start_plan` / `decompose` | One call returns the files a goal touches, code in dependency order and then tests, each with a role and goal relevance. Name the files in the goal (or pass `files`) and the plan starts from them plus a few direct neighbours. Worth it for multi-file changes and handoffs; for a one-file edit, just edit. |
-| `verify_step` | Edits applied to a copy of the project, a syntax preflight, and the project's tests, without touching the working tree. The copy and its cargo target dir are kept, so a second run rebuilds only what changed. `timeout_s` (default 300, 600 per call); `background: true` plus `job_status` for longer runs. Output is capped at 4 KB. |
-| `get_plan` / `add_note` | A saved plan with step status, claims, and the previous agent's notes: how a new session or a sub-agent picks up work cold. |
+| `verify_step` | Edits applied to a copy of the project, a syntax preflight, and the project's tests, without touching the working tree. The copy and its cargo target dir are kept, so a second run rebuilds only what changed. `ref: "HEAD"` tests a clean checkout of a commit instead (tracked files, line endings as a fresh checkout makes them). The reply says where the copy is and how long its deepest build path gets, what the run left behind (files created, changed, deleted, or with only their line endings changed), and each failed test's own message. `plan_id` and `step_id` store the outcome on a plan step. `timeout_s` (default 300, 600 per call); `background: true` plus `job_status` for longer runs. Output is capped at 4 KB. |
+| `get_plan` / `resume` / `add_note` | A saved plan with step status, claims, each step's last verify outcome, and the previous agent's notes: how a new session or a sub-agent picks up work cold. `resume` also names the first step without a passing verify. |
 | `add_constraint` / `get_constraints` | Rules and known-bad approaches that every later agent reads before editing. |
 | `claim_step` / `available_steps` / `record_steps` | Several agents on one plan without doing the same step twice. Claims expire after 10 minutes. |
 | `complete_plan` / `get_recipe` | A strategy that worked, matched to later goals by text similarity. |
@@ -111,16 +111,17 @@ trammel: disable locks, notes
 
 Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.
 
-`tools/list` sizes: default 14,641 bytes; with `TRAMMEL_MCP_SURFACE=all` 28,025, minus `locks` 25,987, minus `notes` 27,263, minus both 25,225; `TRAMMEL_TOOLS=core` 7,656.
+`tools/list` sizes: default 15,605 bytes; with `TRAMMEL_MCP_SURFACE=all` 29,278, minus `locks` 27,240, minus `notes` 28,516, minus both 26,478; `TRAMMEL_TOOLS=core` 7,818.
 
 A typical loop:
 
 1. `get_constraints` and `get_recipe` for anything learned earlier.
 2. `start_plan` with the goal. Keep the `plan_id`.
-3. For each step: edit, then `verify_step` with the changed files. Fix and repeat until it passes.
-4. `complete_plan` saves the strategy as a recipe.
+3. For each step: edit, then `verify_step` with the changed files and the step's `plan_id` and `step_id`, so the outcome is stored on the step. Fix and repeat until it passes. Read `left_behind` and `failed_tests` in the reply.
+4. Before you push, `verify_step` with `ref: "HEAD"` runs the tests on a clean checkout of the commit, as CI will see it.
+5. `complete_plan` saves the strategy as a recipe.
 
-To hand off, `add_note` what you did and what is left, and give the next agent the `plan_id`; it calls `get_plan` and reads the notes. [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) is a fuller prompt for MCP clients. [docs/LLM_CONTRACT.md](docs/LLM_CONTRACT.md) is the JSON contract.
+To hand off, `add_note` what you did and what is left, and give the next agent the `plan_id`; it calls `resume`, reads the notes, and starts at `next_step`, the first step without a passing verify. [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) is a fuller prompt for MCP clients. [docs/LLM_CONTRACT.md](docs/LLM_CONTRACT.md) is the JSON contract.
 
 ## Use it from the command line
 
@@ -141,7 +142,7 @@ trammel "fix tests" --test-cmd pytest -x -q      # plan, then run the tests per 
 
 1. **Decompose.** Parse the project's imports and symbols, add edges inferred from naming and shared-state rules (`data/patterns.json`), sort files by dependency, and score each file's relevance to the goal. When the goal names files (paths, `game.rs`, `` `timeline` ``, `app::sight`) or `files` is passed, the plan is those files plus their direct dependencies, dependents and tests from real imports, capped and ranked below them. Otherwise a whole-repo plan keeps the 15 most relevant files unless `expand_repo` is false. Code comes before tests.
 2. **Explore.** Nine orderings (bottom-up, top-down, risk-first, and others) of the same steps, for when the default order is not the one you want.
-3. **Verify.** Bring a copy of the project (in a git repo, the files git would commit; ignored build output and data stay behind) up to date, rewriting only files that differ, apply the edits, check syntax, run the test command with the copy's own `CARGO_TARGET_DIR`, and report pass or fail with capped output, `elapsed_s`, and `timed_out` when the limit was hit. The copy lives under `<temp>/trammel-verify-cache/` (`TRAMMEL_VERIFY_CACHE=0` for a fresh copy each time).
+3. **Verify.** Bring a copy of the project (in a git repo, the files git would commit; ignored build output and data stay behind) up to date, rewriting only files that differ, apply the edits, check syntax, run the test command with the copy's own `CARGO_TARGET_DIR`, and report pass or fail with capped output, `elapsed_s`, and `timed_out` when the limit was hit. With `ref`, the copy is a clean checkout of that commit instead: git reads the commit into a temporary index and `checkout-index` writes it with `.gitattributes` and this repository's line-ending settings, so the project's index, HEAD and worktree list are not touched. The copy lives at `<temp>/trv/<8 hex>/<slot>/t`, its build output at `.../<slot>/b` (`TRAMMEL_VERIFY_CACHE=<dir>` moves it, `0` makes a fresh copy each time). `copy.longest_path` estimates the longest path a build creates there: the deepest copied file, or for a cargo project the target dir plus cargo's incremental files for the longest crate name (about 118 characters plus the name). On Windows the reply warns from 240 characters and refuses past 259 with `path_too_long`. After the run `left_behind` lists what the run created, changed or deleted in the copy (build output under `target`, `node_modules` and other generated folders does not count), and marks a change of line endings only; the next run restores the copy. A failed run lists `failed_tests` with each test's message (cargo, unittest, pytest, go test, Jest), up to 8 tests of 400 characters each.
 4. **Constrain.** Store rules and failures so later agents see them.
 5. **Remember.** Save a successful strategy; `get_recipe` matches later goals by a text blend (trigram cosine, word Jaccard, substring).
 

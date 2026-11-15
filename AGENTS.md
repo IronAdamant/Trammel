@@ -23,7 +23,7 @@ Those checks are std-only Rust in `examples/`, run from the repo root. No Python
 - `src/lang/code.rs`: lossless lexer for the other languages.
 - `src/lang/symbols.rs`, `src/lang/imports.rs`: hand-written extractors.
 - `src/planner.rs`, `src/score.rs`, `src/strategies.rs`, `src/implicit.rs`: decompose and the nine beams. Rules are `data/patterns.json`. Files the goal names (`goal::named_refs`, plus the `files` argument) seed the plan; `src/lang/rust_mods.rs` is the Rust module resolver that finds their neighbours.
-- `src/harness.rs`, `src/workspace.rs`, `src/jobs.rs`: verify_step. The copy is kept per project with its own cargo target dir; background runs are jobs polled with `job_status`.
+- `src/harness.rs`, `src/workspace.rs`, `src/jobs.rs`: verify_step. The copy is kept per project at a short path with its own cargo target dir, and reports what a run left behind; background runs are jobs polled with `job_status`. `src/gitref.rs`: the clean checkout behind `ref`. `src/pathlen.rs`: the copy's deepest build path and Windows' limit. `src/testfail.rs`: each failed test's message. A verify with `plan_id` and `step_id` stores its outcome on the step (`Store::record_verification`).
 - `src/store.rs`: `.trammel/store` snapshot. `src/migrate.rs` reads an old `trammel.db` and its WAL, read-only.
 - `src/mcp.rs`, `src/cli.rs`, `src/tools.rs`: one dispatch for both surfaces. `src/catalogue.rs`: tool descriptions and input schemas for `tools/list`. `src/groups.rs`: tool groups and the `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` switches.
 - `src/benchstat.rs`: the regression rule.

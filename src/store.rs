@@ -271,6 +271,24 @@ impl Store {
         (n, unknown)
     }
 
+    /// Whether `step_id` is a step of `plan_id`.
+    pub fn has_step(&self, plan_id: i64, step_id: i64) -> bool {
+        self.rows("steps").iter().any(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id))
+    }
+
+    /// Keep the latest verify_step outcome on a step (`verification`). The
+    /// step's status is left alone. False when the step is not in the plan.
+    pub fn record_verification(&mut self, plan_id: i64, step_id: i64, record: Value) -> bool {
+        let rows = self.table_mut("steps");
+        let Some(row) = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)) else { return false };
+        canon::insert(row, "verification", record);
+        if let Some(plan) = self.table_mut("plans").iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(plan_id)) {
+            canon::insert(plan, "updated", Value::Float(now_secs()));
+        }
+        self.dirty = true;
+        true
+    }
+
     pub fn add_constraint(&mut self, kind: &str, description: &str, context: &Value, plan_id: Option<i64>, step_id: Option<i64>) -> i64 {
         let id = self.next_id("constraint");
         self.table_mut("constraints").push(canon::obj(vec![
@@ -567,6 +585,19 @@ pub enum ClaimError {
 /// Step statuses that satisfy a dependency.
 pub fn is_done(status: &str) -> bool {
     matches!(status, "passed" | "skipped" | "completed" | "done")
+}
+
+/// Whether a step's last verify_step passed.
+pub fn verified(step: &Value) -> bool {
+    canon::get(step, "verification").and_then(|v| canon::get(v, "passed")).and_then(canon::as_bool) == Some(true)
+}
+
+/// The first step, in plan order, that has no passing verification and is
+/// not passed or skipped.
+pub fn next_unverified(steps: &[Value]) -> Option<&Value> {
+    let mut ordered: Vec<&Value> = steps.iter().collect();
+    ordered.sort_by_key(|row| canon::get(row, "step_index").and_then(canon::as_i64).unwrap_or(0));
+    ordered.into_iter().find(|row| !verified(row) && !is_done(canon::get(row, "status").and_then(canon::as_str).unwrap_or("")))
 }
 
 /// A step's `depends_on` step indexes. Stored as JSON text; older rows may

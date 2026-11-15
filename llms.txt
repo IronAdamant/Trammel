@@ -5,7 +5,7 @@ Std-only planning binary for coding agents. Version 4.x (see Cargo.toml). JSON o
 - `trammel doctor`: store, languages, protocols, next step
 - `trammel decompose --goal "..." --project-root .`
 - `trammel start_plan --goal "..." --project-root .`
-- `trammel verify_step --project-root . --edits '[...]'`
+- `trammel verify_step --project-root . --edits '[...]'` (add `--ref HEAD` for a clean checkout of the commit, `--plan_id N --step_id M` to store the outcome on a plan step)
 - `trammel mcp`: stdio MCP, protocols 2026-07-28, 2025-11-25, 2025-06-18
 - `npx -y @iron_adamant/trammel mcp` starts that same server. `trammel-mcp` still works.
 - Install with `npm i -g @iron_adamant/trammel` or `npx @iron_adamant/trammel`. The commands are `trammel` and `trammel-mcp`.

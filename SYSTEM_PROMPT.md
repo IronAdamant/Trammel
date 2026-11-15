@@ -16,14 +16,15 @@ Use it for changes that span several files, for work you may hand to another age
 
 1. `get_constraints` and `get_recipe(goal)`: read rules and any strategy that worked for a similar goal.
 2. `start_plan(goal)`: keep the `plan_id`. Pass `summary_only: true` for a short reply; the saved plan still has every step.
-3. For each step, in order: edit the file, then `verify_step(edits: [{path, content}])` with the whole new content of each changed file. If `success` is false, read `preflight.issues` or `trace`, fix, and verify again.
-4. Record what you learn: `add_constraint` for a rule the next agent must follow, `resolve_failure` for what fixed an error.
-5. `complete_plan(plan_id)` when done (`outcome: false` if you gave up). It saves the strategy as a recipe.
+3. For each step, in order: edit the file, then `verify_step(edits: [{path, content}], plan_id, step_id)` with the whole new content of each changed file. The outcome is stored on the step. If `success` is false, read `failed_tests` (each failed test's message), `preflight.issues` or `trace`, fix, and verify again. `left_behind` lists files the run created, changed or deleted in the copy, including a change of line endings only.
+4. Before a push, `verify_step(ref: "HEAD")` runs the tests on a clean checkout of the commit, with the line endings a fresh checkout gets.
+5. Record what you learn: `add_constraint` for a rule the next agent must follow, `resolve_failure` for what fixed an error.
+6. `complete_plan(plan_id)` when done (`outcome: false` if you gave up). It saves the strategy as a recipe.
 
 ## Handing off
 
 - Before you stop, `add_note(plan_id, text)`: what you did, what is left, what to watch out for. Name files and functions.
-- Give the next agent the `plan_id`. It calls `get_plan(plan_id)` (or `resume`) and gets the steps with their status and claims, plus all notes, oldest first.
+- Give the next agent the `plan_id`. It calls `resume(plan_id)` and gets the steps with their status, claims and last verify outcome (`verification`), all notes oldest first, and `next_step`: the first step without a passing verify.
 - Steps the plan has not reached are `pending`. Mark progress with `record_steps(steps: [{step_id, status}])`, status `passed`, `failed`, `skipped`, `running` or `pending`.
 
 ## Several agents on one plan
@@ -97,16 +98,16 @@ Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). 
 | `cancel_job` | **job_id** | Stop a running verify_step background job; its test command is killed. job_status then returns the cancelled result. |
 | `complete_plan` | outcome, **plan_id** | Close a plan as completed (or failed) and save its strategy as a recipe for similar goals. Step statuses are left as they are. |
 | `decompose` | expand_repo, files, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, relevant_only, scope, strict_greenfield, summary_only, suppress_creation_hints | Plan a change without saving it: which files it touches and in what order (dependencies first, tests last), with goal relevance and each file's role (named, dependency, dependent, test). Read-only. Same options as start_plan. Not worth it for a single-file fix. full: true adds symbols and the import graph. |
-| `export_plan` | path, **plan_id** | Return a saved plan as a trammel.plan document, and write it to path when given. |
+| `export_plan` | path, **plan_id** | Return a saved plan as a trammel.plan document (steps with their id and last verification), and write it to path when given. |
 | `get_constraints` | constraint_type | List active constraints. Read these before editing. |
-| `get_plan` | full, **plan_id** | Load a saved plan with its steps, step status, claims and handoff notes. Use it to pick up work another agent or session left. |
+| `get_plan` | full, **plan_id** | Load a saved plan with its steps, step status, claims, each step's last verify_step outcome (verification) and handoff notes. Use it to pick up work another agent or session left. |
 | `get_recipe` | full, **goal** | Return the saved recipe whose goal best matches this one, paraphrases included (similarity at least 0.55), or {recipe: null}. |
 | `job_status` | **job_id**, wait_s | State of a verify_step background job: running (with elapsed_s), completed or cancelled (with the verify result), or not_found. wait_s waits here, up to 600 s, for it to finish. |
-| `resume` | full, **plan_id** | Same as get_plan: load a saved plan to continue it. |
+| `resume` | full, **plan_id** | get_plan plus next_step: the first step with no passing verify_step (and not passed or skipped). Use it to continue a plan after a context summary or a handoff. |
 | `save_recipe` | **goal**, outcome, strategy | Save a strategy that worked so get_recipe can return it for similar goals. |
 | `start_plan` | expand_repo, files, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, persist, relevant_only, scope, strategy, strict_greenfield, summary_only, suppress_creation_hints | Plan a change that spans several files and save it. Use it when the files must change in dependency order, or when another agent or a later session will continue the work (get_plan, add_note). Skip it for a one- or two-file edit you can make now. Name the files in the goal or pass files: the plan starts from them, adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests, each step with a role. Without named files it ranks the whole repo by goal words (15 files). Returns plan_id. |
 | `status` | none | Store location and counts of plans, steps, recipes, constraints and failures. |
-| `verify_step` | background, edits, full_output, language, test_cmd, timeout_s | Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, or when other agents share your working tree; if you can just run the tests yourself, do that. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. Unbalanced brackets fail at once with line numbers. A timeout answers timed_out with elapsed_s and how to raise timeout_s. Long runs: background: true returns a job_id at once; poll job_status. Output capped at 4 KB. |
+| `verify_step` | background, edits, full_output, language, plan_id, ref, step_id, test_cmd, timeout_s | Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, to check the commit you will push (ref: HEAD, a clean checkout), or when other agents share your working tree. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. The reply has copy.path and copy.longest_path (refused past Windows' 259 characters), left_behind (files the run created, changed, deleted, or whose line endings changed), and for a failure failed_tests with each test's message. With plan_id and step_id the outcome is stored on that step. Unbalanced brackets fail at once. Long runs: background: true and job_status. Output capped at 4 KB. |
 
 ### Advanced tools (`TRAMMEL_MCP_SURFACE=all`; always callable by name)
 
@@ -131,4 +132,4 @@ Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). 
 | `update_plan_status` | **plan_id**, **status** | Set a plan's status, e.g. failed when abandoning it. |
 | `usage_stats` | none | Count of local usage events, recorded only when TRAMMEL_TELEMETRY=1. |
 | `validate_recipes` | none | Check every recipe's files against the project; delete recipes whose files are all gone. Returns recipes_checked, files_missing, removed. |
-| `verify_plan` | full_output, language, **plan_id**, test_cmd, timeout_s | Run verify_step for each step of a saved plan that carries file content, in order, stopping at the first failure. Steps without content count as done. The whole call stops after 600 s with timed_out. |
+| `verify_plan` | full_output, language, **plan_id**, ref, test_cmd, timeout_s | Run verify_step for each step of a saved plan that carries file content, in order, stopping at the first failure, and store each outcome on its step. Steps without content count as done. The whole call stops after 600 s with timed_out. |
