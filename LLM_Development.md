@@ -18,6 +18,14 @@ The old Python package lives on the `python-legacy` branch. Entries below 4.0.0 
 
 ---
 
+## 4.5.1: racy stamps in the verify copy
+
+**Date:** 2026-11-15
+
+- `src/workspace.rs`: `trusted(stamp, recorded)` applies git's racy-timestamp rule with a 2 s margin. `sync` skips a file unread only when both stamps match and are trusted against the manifest's `#recorded` time; `left_behind` the same against the sync's start. Tests force equal stamps with `File::set_modified` (restore, `left_behind`, and a count of byte compares).
+
+---
+
 ## 4.5.0: verify says where it ran and what it left, ref, outcomes on the plan
 
 **Date:** 2026-11-15

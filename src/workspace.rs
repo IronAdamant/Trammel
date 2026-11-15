@@ -9,7 +9,11 @@
 //! its old modification time and an edited or restored one gets a new one.
 //! That is what lets a build tool's own change detection work across runs:
 //! `CARGO_TARGET_DIR` points at `<N>/b`, so cargo rebuilds only the crates
-//! whose files changed since the last verify.
+//! whose files changed since the last verify. A file is skipped unread only
+//! when its size and modification time match the manifest and that time is
+//! more than two seconds older than when the stamps were taken; any other is
+//! compared byte for byte (git's racy-timestamp rule), so a same-size rewrite
+//! within one clock tick is still seen.
 //!
 //! The copy holds the working tree (what git would commit) or, with a
 //! `ref`, a clean checkout of one commit, staged in `<N>/c` by
@@ -39,6 +43,13 @@ const STALE_LOCK: Duration = Duration::from_secs(3 * 3600);
 const UNUSED_FOR: Duration = Duration::from_secs(14 * 24 * 3600);
 /// Paths listed in `left_behind`.
 const LEFT_LISTED: usize = 5;
+/// A stamp is trusted only when the file's modification time is at least
+/// this much older than the moment the stamp was recorded (git's "racy
+/// timestamp" rule). A file written in the same clock tick as the stamp was
+/// taken, then rewritten with the same length, keeps an equal stamp: such a
+/// file is compared byte for byte instead. Two seconds covers coarse clocks
+/// (Windows' 15.6 ms tick, FAT's 2 s mtimes).
+const RACY_MARGIN_NS: u128 = 2_000_000_000;
 
 /// What the copy holds.
 #[derive(Clone, Debug, PartialEq)]
@@ -75,6 +86,12 @@ pub struct Workspace {
     lock: Option<PathBuf>,
     manifest_path: Option<PathBuf>,
     manifest: BTreeMap<String, Entry>,
+    /// When the stamps in `manifest` and `put` were taken (nanoseconds since
+    /// the epoch, read just before the sync started). 0: unknown.
+    recorded: u128,
+    /// Files read to compare their bytes during the sync.
+    #[cfg(test)]
+    compared: usize,
 }
 
 /// What a copied file looked like when the copy matched its source.
@@ -139,9 +156,14 @@ impl Workspace {
         let staging = matches!(source, Source::Commit(_)).then(|| suffixed(&tree, "c"));
         let (origin, files) = gather(root, source, staging.as_deref()).map_err(PrepareError::Failed)?;
         let path_len = pathlen::estimate(&tree, &tree.join("target"), &files, &origin);
-        let mut ws = Workspace { tree, target: None, files_written: 0, path_len, origin, staging, put: BTreeMap::new(), lock: None, manifest_path: None, manifest: BTreeMap::new() };
+        let mut ws = Workspace {
+            tree, target: None, files_written: 0, path_len, origin, staging, put: BTreeMap::new(), lock: None, manifest_path: None, manifest: BTreeMap::new(), recorded: 0,
+            #[cfg(test)]
+            compared: 0,
+        };
         ws.refuse_if_too_long()?;
         let _ = fs::remove_dir_all(&ws.tree);
+        ws.recorded = now_nanos();
         copy_files(&ws.origin, &ws.tree, &files).map_err(PrepareError::Failed)?;
         for rel in &files {
             if let (Some(src), Some(dst)) = (stamp(&ws.origin.join(rel)), stamp(&ws.tree.join(rel))) {
@@ -178,6 +200,7 @@ impl Workspace {
             let tree = slot.join("t");
             let target = slot.join("b");
             let path_len = pathlen::estimate(&tree, &target, &files, &origin);
+            let (manifest, recorded) = read_manifest(&manifest_path);
             let mut ws = Workspace {
                 tree,
                 target: Some(target),
@@ -188,7 +211,10 @@ impl Workspace {
                 put: BTreeMap::new(),
                 lock: Some(lock),
                 manifest_path: Some(manifest_path.clone()),
-                manifest: read_manifest(&manifest_path),
+                manifest,
+                recorded,
+                #[cfg(test)]
+                compared: 0,
             };
             ws.refuse_if_too_long()?;
             match ws.sync(&files) {
@@ -212,8 +238,11 @@ impl Workspace {
     }
 
     /// Make `tree` hold exactly `files` of the origin, rewriting only what
-    /// differs.
+    /// differs. A file whose stamps match the manifest and are not racy is
+    /// trusted without reading it; any other is compared byte for byte.
     fn sync(&mut self, files: &[String]) -> Result<(), String> {
+        let started = now_nanos();
+        let before = self.recorded;
         fs::create_dir_all(&self.tree).map_err(|e| e.to_string())?;
         let mut next = BTreeMap::new();
         let wanted: BTreeSet<&str> = files.iter().map(|s| s.as_str()).collect();
@@ -222,11 +251,13 @@ impl Workspace {
             let to = self.tree.join(rel);
             let Some(src) = stamp(&from) else { continue };
             if let (Some(old), Some(dst)) = (self.manifest.get(rel), stamp(&to)) {
-                if old.src == src && old.dst == dst {
+                if old.src == src && old.dst == dst && trusted(src, before) && trusted(dst, before) {
                     next.insert(rel.clone(), *old);
                     continue;
                 }
             }
+            #[cfg(test)]
+            { self.compared += 1; }
             let bytes = fs::read(&from).map_err(|e| format!("{rel}: {e}"))?;
             if fs::read(&to).ok().as_deref() != Some(bytes.as_slice()) {
                 if let Some(parent) = to.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
@@ -251,6 +282,7 @@ impl Workspace {
         }
         self.put = next.iter().map(|(rel, e)| (rel.clone(), Put { dst: e.dst, src: Some(e.src), edit: None })).collect();
         self.manifest = next;
+        self.recorded = started;
         Ok(())
     }
 
@@ -281,7 +313,7 @@ impl Workspace {
                 continue;
             };
             let path = self.tree.join(rel);
-            if stamp(&path) == Some(put.dst) { continue; }
+            if stamp(&path) == Some(put.dst) && trusted(put.dst, self.recorded) { continue; }
             let expected = match &put.edit {
                 Some(bytes) => Some(bytes.clone()),
                 // A source changed since the sync cannot say what was put there.
@@ -330,7 +362,7 @@ impl Workspace {
             Some(path) => {
                 // A test may rewrite files in the copy; the stored stamps
                 // catch that next time, because they no longer match.
-                let _ = write_manifest(path, &self.manifest);
+                let _ = write_manifest(path, &self.manifest, self.recorded);
             }
             None => { let _ = fs::remove_dir_all(&self.tree); }
         }
@@ -464,26 +496,44 @@ fn stamp(path: &Path) -> Option<(u64, u128)> {
     Some((meta.len(), mtime))
 }
 
-fn read_manifest(path: &Path) -> BTreeMap<String, Entry> {
+/// Whether a stamp can stand for the file's bytes: its modification time is
+/// safely older than `recorded`, when the stamp was taken. Otherwise a change
+/// within the same clock tick could have kept the same size and time.
+fn trusted(stamp: (u64, u128), recorded: u128) -> bool {
+    stamp.1.saturating_add(RACY_MARGIN_NS) < recorded
+}
+
+/// The manifest and when its stamps were taken. A manifest from 4.5.0 or
+/// older has no `#recorded` line: 0, so every entry is compared once.
+fn read_manifest(path: &Path) -> (BTreeMap<String, Entry>, u128) {
     let mut out = BTreeMap::new();
-    let Ok(text) = fs::read_to_string(path) else { return out };
+    let mut recorded = 0;
+    let Ok(text) = fs::read_to_string(path) else { return (out, recorded) };
     for line in text.lines() {
+        if let Some(when) = line.strip_prefix("#recorded\t") {
+            recorded = when.trim().parse().unwrap_or(0);
+            continue;
+        }
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() != 5 { continue; }
         let nums: Vec<u128> = parts[1..].iter().filter_map(|p| p.parse().ok()).collect();
         if nums.len() != 4 { continue; }
         out.insert(parts[0].to_string(), Entry { src: (nums[0] as u64, nums[1]), dst: (nums[2] as u64, nums[3]) });
     }
-    out
+    (out, recorded)
 }
 
-fn write_manifest(path: &Path, manifest: &BTreeMap<String, Entry>) -> std::io::Result<()> {
-    let mut text = String::new();
+fn write_manifest(path: &Path, manifest: &BTreeMap<String, Entry>, recorded: u128) -> std::io::Result<()> {
+    let mut text = format!("#recorded\t{recorded}\n");
     for (rel, e) in manifest {
         if rel.contains('\t') || rel.contains('\n') { continue; }
         text.push_str(&format!("{rel}\t{}\t{}\t{}\t{}\n", e.src.0, e.src.1, e.dst.0, e.dst.1));
     }
     fs::write(path, text)
+}
+
+fn now_nanos() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
 }
 
 fn now_secs() -> u64 {
@@ -685,6 +735,82 @@ mod tests {
         let ws = slot(&src, &cache);
         assert_eq!(fs::read_to_string(tree.join("golden.txt")).unwrap(), "want");
         ws.finish();
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    /// Rewrite `rel` in the copy with `text` (same length as before) and put
+    /// its modification time back, so its stamp equals the recorded one: what
+    /// a rewrite within one clock tick of the sync looks like.
+    fn rewrite_keeping_stamp(tree: &Path, rel: &str, text: &str) {
+        let path = tree.join(rel);
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::write(&path, text).unwrap();
+        fs::OpenOptions::new().write(true).open(&path).unwrap().set_modified(before).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+    }
+
+    #[test]
+    fn a_same_size_rewrite_with_an_equal_stamp_is_still_restored() {
+        let src = scratch("racy-src");
+        let cache = scratch("racy-cache");
+        write(&src, "golden.txt", "want");
+        let ws = slot(&src, &cache);
+        let tree = ws.tree.clone();
+        ws.finish();
+        rewrite_keeping_stamp(&tree, "golden.txt", "oops");
+        let ws = slot(&src, &cache);
+        assert_eq!(fs::read_to_string(tree.join("golden.txt")).unwrap(), "want", "the stamp was taken in the same tick as the write, so it is not trusted");
+        ws.finish();
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn left_behind_sees_a_same_size_rewrite_with_an_equal_stamp() {
+        let src = scratch("racy-left-src");
+        let cache = scratch("racy-left-cache");
+        write(&src, "golden.txt", "want");
+        let mut ws = slot(&src, &cache);
+        ws.write_edit("edit.txt", "aaaa").unwrap();
+        let tree = ws.tree.clone();
+        rewrite_keeping_stamp(&tree, "golden.txt", "oops");
+        rewrite_keeping_stamp(&tree, "edit.txt", "bbbb");
+        let left = ws.left_behind();
+        assert_eq!(left.modified, vec![("edit.txt".to_string(), None), ("golden.txt".to_string(), None)]);
+        ws.finish();
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn only_racy_stamps_pay_for_a_byte_compare() {
+        assert!(!trusted((4, 1_000), 1_000), "same tick");
+        assert!(!trusted((4, 1_000), 1_000 + RACY_MARGIN_NS), "inside the margin");
+        assert!(trusted((4, 1_000), 1_001 + RACY_MARGIN_NS));
+        let src = scratch("racy-cost-src");
+        let cache = scratch("racy-cost-cache");
+        for rel in ["a.txt", "b.txt", "c.txt"] { write(&src, rel, rel); }
+        let ws = slot(&src, &cache);
+        assert_eq!(ws.compared, 3, "a new slot reads everything");
+        let tree = ws.tree.clone();
+        ws.finish();
+        // Files whose times are an hour old, in the source and the copy, as
+        // after a sync long ago.
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        for rel in ["a.txt", "b.txt", "c.txt"] {
+            for root in [&src, &tree] { fs::OpenOptions::new().write(true).open(root.join(rel)).unwrap().set_modified(old).unwrap(); }
+        }
+        let ws = slot(&src, &cache);
+        assert_eq!(ws.compared, 3, "new stamps are compared once");
+        assert_eq!(ws.files_written, 0, "equal bytes are not rewritten");
+        ws.finish();
+        let ws = slot(&src, &cache);
+        assert_eq!(ws.compared, 0, "old stamps are trusted without reading the files");
+        ws.finish();
+        // The manifest carries when its stamps were taken.
+        let manifest = fs::read_to_string(tree.parent().unwrap().join("manifest.tsv")).unwrap();
+        assert!(manifest.starts_with("#recorded\t"), "{manifest}");
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&cache);
     }
