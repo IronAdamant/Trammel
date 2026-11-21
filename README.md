@@ -18,11 +18,11 @@ Give it a goal and a project. It reads the imports and symbols, orders the files
 | Call | What it saves the agent |
 |---|---|
 | `start_plan` / `decompose` | One call returns the files a goal touches, code in dependency order and then tests, each with a role and goal relevance. Name the files in the goal (or pass `files`) and the plan starts from them plus a few direct neighbours. Worth it for multi-file changes and handoffs; for a one-file edit, just edit. |
-| `verify_step` | Edits applied to a copy of the project, a syntax preflight, and the project's tests, without touching the working tree. The copy and its cargo target dir are kept, so a second run rebuilds only what changed. `ref: "HEAD"` tests a clean checkout of a commit instead (tracked files, line endings as a fresh checkout makes them). The reply says where the copy is and how long its deepest build path gets, what the run left behind (files created, changed, deleted, or with only their line endings changed), and each failed test's own message. `plan_id` and `step_id` store the outcome on a plan step. `timeout_s` (default 300, 600 per call); `background: true` plus `job_status` for longer runs. Output is capped at 4 KB. |
+| `verify_step` | Edits applied to a copy of the project, a syntax preflight, and the project's tests, without touching the working tree. The copy and its cargo target dir are kept, so a second run rebuilds only what changed. `ref: "HEAD"` tests a clean checkout of a commit instead (tracked files, line endings as a fresh checkout makes them). The reply says where the copy is and how long its deepest build path gets, what the run left behind (files created, changed, deleted, or with only their line endings changed), and each failed test's own message. `plan_id` and `step_id` store the outcome on a plan step, and a pass marks the step passed. An unchanged earlier pass of the same command is returned with `cached` instead of running again. `timeout_s` (default 300, 600 per call); `background: true` plus `job_status` for longer runs. Output is capped at 4 KB. |
 | `get_plan` / `resume` / `add_note` | A saved plan with step status, claims, each step's last verify outcome, and the previous agent's notes: how a new session or a sub-agent picks up work cold. `resume` also names the first step without a passing verify. |
 | `add_constraint` / `get_constraints` | Rules and known-bad approaches that every later agent reads before editing. |
 | `claim_step` / `available_steps` / `record_steps` | Several agents on one plan without doing the same step twice. Claims expire after 10 minutes. |
-| `complete_plan` / `get_recipe` | A strategy that worked, matched to later goals by text similarity. |
+| `complete_plan` / `get_recipe` | A strategy that worked, matched to later goals by text similarity. `complete_plan` with `verify: true` and `note` tests, leaves the handoff note and closes the plan in one call. |
 
 ## Install
 
@@ -111,15 +111,17 @@ trammel: disable locks, notes
 
 Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). Lists take group or tool names, separated by commas or spaces. A wrong name is ignored with a warning in the `initialize` instructions and in `status`; it never stops the server. `TRAMMEL_TOOLS` / `TRAMMEL_DISABLE` in the server's `env` override the matching line.
 
-`tools/list` sizes: default 15,605 bytes; with `TRAMMEL_MCP_SURFACE=all` 29,278, minus `locks` 27,240, minus `notes` 28,516, minus both 26,478; `TRAMMEL_TOOLS=core` 7,818.
+`tools/list` sizes: default 16,434 bytes; with `TRAMMEL_MCP_SURFACE=all` 30,293, minus `locks` 28,231, minus `notes` 29,531, minus both 27,469; `TRAMMEL_TOOLS=core` 8,500.
 
 A typical loop:
 
 1. `get_constraints` and `get_recipe` for anything learned earlier.
-2. `start_plan` with the goal. Keep the `plan_id`.
-3. For each step: edit, then `verify_step` with the changed files and the step's `plan_id` and `step_id`, so the outcome is stored on the step. Fix and repeat until it passes. Read `left_behind` and `failed_tests` in the reply.
+2. `start_plan` with the goal. Keep the `plan_id`; each step in the reply has its `id`. Files the goal names that do not exist yet are `create` steps.
+3. For each step: edit, then `verify_step` with the changed files and the step's `plan_id` and `step_id`, so the outcome is stored on the step and a pass marks it `passed`. Fix and repeat until it passes. Read `left_behind` and `failed_tests` in the reply. If nothing changed since the same command passed, the reply is that run's result with `cached` (`rerun: true` runs the tests anyway).
 4. Before you push, `verify_step` with `ref: "HEAD"` runs the tests on a clean checkout of the commit, as CI will see it.
-5. `complete_plan` saves the strategy as a recipe.
+5. `complete_plan` with `verify: true` and `note` runs the tests, adds the handoff note and closes the plan in one call (a failure leaves it open). It saves the strategy as a recipe.
+
+For a three-step plan that is 1 + 3 + 1 = 5 calls: `start_plan`, one `verify_step` per step, `complete_plan`. Before this release the same loop took 8: `get_plan` for the step ids, and `verify_step`, `add_note` and `complete_plan` at the end.
 
 To hand off, `add_note` what you did and what is left, and give the next agent the `plan_id`; it calls `resume`, reads the notes, and starts at `next_step`, the first step without a passing verify. [SYSTEM_PROMPT.md](SYSTEM_PROMPT.md) is a fuller prompt for MCP clients. [docs/LLM_CONTRACT.md](docs/LLM_CONTRACT.md) is the JSON contract.
 

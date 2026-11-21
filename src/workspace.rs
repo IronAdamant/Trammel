@@ -423,6 +423,18 @@ pub fn forget(root: &Path) {
     let _ = fs::remove_dir_all(base.join(cache_key(&canonical)));
 }
 
+/// The per-project directory beside the cached copies, for state such as
+/// the verify cache. None when `TRAMMEL_VERIFY_CACHE` turns caching off.
+pub fn state_dir(root: &Path) -> Option<PathBuf> {
+    let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    Some(cache_base()?.join(cache_key(&canonical)))
+}
+
+/// Size and modification time (nanoseconds) of a file, for change checks.
+pub fn file_stamp(path: &Path) -> Option<(u64, u128)> {
+    stamp(path)
+}
+
 /// Eight hex digits of the project path's hash. Two projects that share a
 /// key share a cache: each run still syncs the copy to its own files.
 fn cache_key(canonical: &Path) -> String {

@@ -183,6 +183,10 @@ fn verify_outcomes_are_stored_on_plan_steps_and_resume_points_at_the_next() {
     let Some(Value::Array(steps)) = get(&got, "steps") else { panic!("{}", stable(&got)) };
     let ids: Vec<i64> = steps.iter().map(|st| get(st, "id").and_then(as_i64).unwrap()).collect();
     assert!(ids.len() >= 2, "{}", stable(&got));
+    // start_plan already says each step's id, so get_plan is not needed.
+    let Some(Value::Array(planned)) = get(&plan, "strategy").and_then(|st| get(st, "steps")) else { panic!("{}", stable(&plan)) };
+    assert_eq!(planned.iter().map(|st| get(st, "id").and_then(as_i64).unwrap()).collect::<Vec<_>>(), ids);
+    assert!(s(&plan, "next").contains(&format!("step_id {}", ids[0])), "{}", stable(&plan));
     // Half a link is refused, and so is a step of another plan.
     let half = live.call("verify_step", args(vec![("test_cmd", passing.clone()), ("plan_id", Value::Int(plan_id))]));
     assert_eq!(s(&half, "code"), "missing_argument");
@@ -197,7 +201,7 @@ fn verify_outcomes_are_stored_on_plan_steps_and_resume_points_at_the_next() {
     assert_eq!(tests.len(), 1, "{}", stable(&failed));
     assert_eq!(s(&tests[0], "name"), "tests::adds");
     assert_eq!(s(&tests[0], "excerpt"), "thread 'tests::adds' panicked at src/lib.rs:9:9:\nassertion failed: total == 4");
-    assert_eq!(stable(get(&failed, "recorded").unwrap()), format!(r#"{{"plan_id":{plan_id},"step_id":{}}}"#, ids[0]));
+    assert_eq!(stable(get(&failed, "recorded").unwrap()), format!(r#"{{"plan_id":{plan_id},"status":"pending","step_id":{}}}"#, ids[0]));
     let resumed = live.call("resume", args(vec![("plan_id", Value::Int(plan_id))]));
     let next = get(&resumed, "next_step").unwrap();
     assert_eq!(get(next, "id").and_then(as_i64), Some(ids[0]), "a failed step is still next: {}", stable(&resumed));
@@ -208,9 +212,12 @@ fn verify_outcomes_are_stored_on_plan_steps_and_resume_points_at_the_next() {
     assert!(get(verification, "at").is_some());
     assert_eq!(s(verification, "excerpt"), "tests::adds: thread 'tests::adds' panicked at src/lib.rs:9:9: | assertion failed: total == 4");
 
-    // A pass moves resume on; a background run stores its outcome too.
+    // A pass marks the step passed and moves resume on; a background run
+    // stores its outcome too.
     let ok = live.call("verify_step", args(vec![("test_cmd", passing.clone()), ("plan_id", Value::Int(plan_id)), ("step_id", Value::Int(ids[0]))]));
     assert!(b(&ok, "success") && get(&ok, "recorded").is_some());
+    assert_eq!(s(get(&ok, "recorded").unwrap(), "status"), "passed");
+    assert!(get(&ok, "cached").is_none(), "the first pass runs the tests");
     let resumed = live.call("resume", args(vec![("plan_id", Value::Int(plan_id))]));
     assert_eq!(get(get(&resumed, "next_step").unwrap(), "id").and_then(as_i64), Some(ids[1]));
     for id in &ids[1..] {
@@ -218,6 +225,8 @@ fn verify_outcomes_are_stored_on_plan_steps_and_resume_points_at_the_next() {
         let done = live.call("job_status", args(vec![("job_id", Value::string(s(&job, "job_id"))), ("wait_s", Value::Int(60))]));
         assert_eq!(s(&done, "status"), "completed", "{}", stable(&done));
         assert!(get(get(&done, "result").unwrap(), "recorded").is_some(), "{}", stable(&done));
+        // Nothing changed since the pass: the same result, not run again.
+        assert!(get(get(&done, "result").unwrap(), "cached").is_some(), "{}", stable(&done));
     }
     let resumed = live.call("resume", args(vec![("plan_id", Value::Int(plan_id))]));
     assert!(matches!(get(&resumed, "next_step"), Some(Value::Null)), "{}", stable(&resumed));
@@ -226,11 +235,20 @@ fn verify_outcomes_are_stored_on_plan_steps_and_resume_points_at_the_next() {
     let got = live.call("get_plan", args(vec![("plan_id", Value::Int(plan_id))]));
     let Some(Value::Array(steps)) = get(&got, "steps") else { panic!() };
     assert!(steps.iter().all(|st| get(st, "verification").map(|v| b(v, "passed")).unwrap_or(false)), "{}", stable(&got));
+    assert!(steps.iter().all(|st| s(st, "status") == "passed"), "{}", stable(&got));
     assert!(get(&got, "next_step").is_none(), "get_plan is unchanged apart from verification");
     let exported = live.call("export_plan", args(vec![("plan_id", Value::Int(plan_id))]));
     let Some(Value::Array(steps)) = get(&exported, "steps") else { panic!() };
     assert_eq!(get(&steps[0], "id").and_then(as_i64), Some(ids[0]));
     assert!(b(get(&steps[0], "verification").unwrap(), "passed"), "{}", stable(&exported));
+    // A change to a file runs the tests again; rerun does too.
+    std::fs::write(dir.join("models.py"), "class Item:\n    stock = 0\n").unwrap();
+    let fresh = live.call("verify_step", args(vec![("test_cmd", passing.clone())]));
+    assert!(b(&fresh, "success") && get(&fresh, "cached").is_none(), "{}", stable(&fresh));
+    let again = live.call("verify_step", args(vec![("test_cmd", passing.clone())]));
+    assert!(get(&again, "cached").is_some(), "{}", stable(&again));
+    let forced = live.call("verify_step", args(vec![("test_cmd", passing.clone()), ("rerun", Value::Bool(true))]));
+    assert!(get(&forced, "cached").is_none(), "{}", stable(&forced));
     live.finish();
     forget(&dir);
 }
@@ -278,4 +296,31 @@ fn the_copy_reports_its_depth_and_windows_refuses_a_copy_too_deep() {
     }
     let _ = std::fs::remove_dir_all(&near_root);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// complete_plan with verify and note: one call tests, leaves the handoff
+/// note and closes the plan; a failure leaves the plan open.
+#[test]
+fn complete_plan_verifies_notes_and_closes_in_one_call() {
+    let dir = project("complete");
+    std::fs::write(dir.join("models.py"), "class Item:\n    pass\n").unwrap();
+    std::fs::write(dir.join("store.py"), "from models import Item\n").unwrap();
+    let mut live = Live::start(&dir, &[]);
+    let plan = live.call("start_plan", args(vec![("goal", Value::string("add stock to Item in models.py and store.py"))]));
+    let plan_id = get(&plan, "plan_id").and_then(as_i64).unwrap();
+    let failing = live.call("complete_plan", args(vec![("plan_id", Value::Int(plan_id)), ("verify", Value::Bool(true)), ("note", Value::string("done")), ("test_cmd", cmd("exit 1", "false"))]));
+    assert!(!b(&failing, "completed"), "{}", stable(&failing));
+    assert!(!b(get(&failing, "verify").unwrap(), "success"));
+    let open = live.call("get_plan", args(vec![("plan_id", Value::Int(plan_id))]));
+    assert_ne!(s(&open, "status"), "completed");
+    assert!(matches!(get(&open, "notes"), Some(Value::Array(n)) if n.is_empty()), "{}", stable(&open));
+    let done = live.call("complete_plan", args(vec![("plan_id", Value::Int(plan_id)), ("verify", Value::Bool(true)), ("note", Value::string("stock added; store reads it")), ("test_cmd", cmd("exit 0", "true"))]));
+    assert!(b(&done, "completed") && b(get(&done, "verify").unwrap(), "success"), "{}", stable(&done));
+    assert!(get(&done, "note_id").is_some() && get(&done, "recipe").is_some());
+    let closed = live.call("get_plan", args(vec![("plan_id", Value::Int(plan_id))]));
+    assert_eq!(s(&closed, "status"), "completed");
+    let Some(Value::Array(notes)) = get(&closed, "notes") else { panic!() };
+    assert_eq!(s(&notes[0], "text"), "stock added; store reads it");
+    live.finish();
+    forget(&dir);
 }

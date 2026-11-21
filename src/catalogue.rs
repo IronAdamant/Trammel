@@ -12,8 +12,8 @@ type Param = (&'static str, &'static str, bool, &'static str);
 const ROOT: Param = ("project_root", "string", false, "Project directory. Default: the server's working directory.");
 
 const PLAN: &[Param] = &[
-    ("goal", "string", true, "What to change, in plain words. Name the files when you know them (paths, file names such as game.rs, `module` names, crate::paths): the plan starts from those."),
-    ("files", "string[]", false, "Files to plan from, relative to project_root. Added to the files the goal names."),
+    ("goal", "string", true, "What to change, in plain words. Name the files when you know them (paths, file names such as game.rs, `module` names, crate::paths): the plan starts from those. A path that does not exist yet is a create step when the goal creates something (\"a.py uses b.py\" orders them)."),
+    ("files", "string[]", false, "Files to plan from, relative to project_root (new ones too). Added to the files the goal names."),
     ("scope", "string", false, "Subdirectory to analyze, relative to project_root."),
     ("language", "string", false, "Override detection: python, typescript, javascript, go, rust, cpp, c, java, kotlin, csharp, ruby, php, swift, dart, zig."),
     ("focus_keywords", "string[]", false, "Extra words that mark files as relevant."),
@@ -31,7 +31,7 @@ const PLAN: &[Param] = &[
 const FULL: Param = ("full", "boolean", false, "Return every field (symbols, rationale, dependency graph, analysis details). Default false: a compact reply.");
 
 const PLAN_ID: Param = ("plan_id", "integer", true, "Plan id from start_plan or list_plans.");
-const STEP_ID: Param = ("step_id", "integer", true, "The step's `id` from get_plan or available_steps (not step_index).");
+const STEP_ID: Param = ("step_id", "integer", true, "The step's `id` from start_plan, get_plan or available_steps (not step_index).");
 const AGENT_ID: Param = ("agent_id", "string", true, "Stable name for the calling agent, e.g. its session or role.");
 
 const VERIFY: &[Param] = &[
@@ -50,7 +50,7 @@ struct Tool {
 }
 
 const TOOLS: &[Tool] = &[
-    Tool { name: "start_plan", description: "Plan a change that spans several files and save it. Use it when the files must change in dependency order, or when another agent or a later session will continue the work (get_plan, add_note). Skip it for a one- or two-file edit you can make now. Name the files in the goal or pass files: the plan starts from them, adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests, each step with a role. Without named files it ranks the whole repo by goal words (15 files). Returns plan_id.",
+    Tool { name: "start_plan", description: "Plan a change that spans several files and save it. Use it when the files must change in dependency order, or when another agent or a later session will continue the work (get_plan, add_note). Skip it for a one- or two-file edit you can make now. Name the files in the goal or pass files: the plan starts from them, adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests, each step with a role. Without named files it ranks the whole repo by goal words (15 files). Returns plan_id and each step's id.",
         params: &[("persist", "boolean", false, "Default true. false returns the plan without saving it."), ("strategy", "string", false, "Strategy name to record on the saved plan."), FULL], extra: &[PLAN] },
     Tool { name: "decompose", description: "Plan a change without saving it: which files it touches and in what order (dependencies first, tests last), with goal relevance and each file's role (named, dependency, dependent, test). Read-only. Same options as start_plan. Not worth it for a single-file fix. full: true adds symbols and the import graph.",
         params: &[FULL], extra: &[PLAN] },
@@ -68,21 +68,21 @@ const TOOLS: &[Tool] = &[
         params: &[("status", "pending|running|completed|failed", false, "Only plans with this status.")], extra: &[] },
     Tool { name: "update_plan_status", description: "Set a plan's status, e.g. failed when abandoning it.",
         params: &[PLAN_ID, ("status", "pending|running|completed|failed", true, "New status.")], extra: &[] },
-    Tool { name: "complete_plan", description: "Close a plan as completed (or failed) and save its strategy as a recipe for similar goals. Step statuses are left as they are.",
-        params: &[PLAN_ID, ("outcome", "boolean", false, "Default true. false records a failure.")], extra: &[] },
+    Tool { name: "complete_plan", description: "Close a plan as completed (or failed) and save its strategy as a recipe for similar goals. verify: true runs the tests first (the plan stays open if they fail); note adds a handoff note.",
+        params: &[PLAN_ID, ("outcome", "boolean", false, "Default true. false records a failure."), ("verify", "boolean", false, "Run verify_step first; test_cmd, ref and timeout_s as there."), ("note", "string", false, "Handoff note: what was done, what is left."), ("test_cmd", "cmd", false, "For verify."), ("ref", "string", false, "For verify, e.g. HEAD.")], extra: &[] },
     Tool { name: "merge_plans", description: "Save a new plan whose steps are plan A's then plan B's (or interleaved).",
         params: &[("plan_a_id", "integer", true, "First plan id."), ("plan_b_id", "integer", true, "Second plan id."), ("strategy", "sequential|interleave", false, "Default sequential.")], extra: &[] },
     Tool { name: "export_plan", description: "Return a saved plan as a trammel.plan document (steps with their id and last verification), and write it to path when given.",
         params: &[PLAN_ID, ("path", "string", false, "File to write the JSON to.")], extra: &[] },
-    Tool { name: "verify_step", description: "Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, to check the commit you will push (ref: HEAD, a clean checkout), or when other agents share your working tree. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. The reply has copy.path and copy.longest_path (refused past Windows' 259 characters), left_behind (files the run created, changed, deleted, or whose line endings changed), and for a failure failed_tests with each test's message. With plan_id and step_id the outcome is stored on that step. Unbalanced brackets fail at once. Long runs: background: true and job_status. Output capped at 4 KB.",
-        params: &[("edits", "edits", false, "Files to write in the copy: [{path, content}], content is the whole new file."), ("background", "boolean", false, "Return a job_id at once and run in the background (up to 3600 s); read the result with job_status. Needs the MCP server."), ("plan_id", "integer", false, "With step_id: store the outcome (passed, command, commit or working tree, time, failure excerpt) on that plan step."), ("step_id", "integer", false, "The step uid=197609(miko5) gid=197609 groups=197609 from get_plan or resume (not step_index). Needs plan_id.")], extra: &[VERIFY] },
+    Tool { name: "verify_step", description: "Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, to check the commit you will push (ref: HEAD, a clean checkout), or when other agents share your working tree. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. The reply has copy.path and copy.longest_path (refused past Windows' 259 characters), left_behind (files the run created, changed, deleted, or whose line endings changed), and for a failure failed_tests with each test's message. With plan_id and step_id the outcome is stored on that step; a pass marks it passed. An unchanged earlier pass of the same command is returned with cached. Unbalanced brackets fail at once. Long runs: background: true and job_status. Output capped at 4 KB.",
+        params: &[("edits", "edits", false, "Files to write in the copy: [{path, content}], content is the whole new file."), ("background", "boolean", false, "Return a job_id at once and run in the background (up to 3600 s); read the result with job_status. Needs the MCP server."), ("plan_id", "integer", false, "With step_id: store the outcome (passed, command, commit or working tree, time, failure excerpt) on that plan step."), ("step_id", "integer", false, "The step `id` from start_plan, get_plan or resume (not step_index). Needs plan_id."), ("rerun", "boolean", false, "Run even if a cached pass applies.")], extra: &[VERIFY] },
     Tool { name: "job_status", description: "State of a verify_step background job: running (with elapsed_s), completed or cancelled (with the verify result), or not_found. wait_s waits here, up to 600 s, for it to finish.",
         params: &[("job_id", "string", true, "Id from verify_step with background: true."), ("wait_s", "number", false, "Seconds to wait for the job to finish before answering. Default 0, at most 600.")], extra: &[] },
     Tool { name: "cancel_job", description: "Stop a running verify_step background job; its test command is killed. job_status then returns the cancelled result.",
         params: &[("job_id", "string", true, "Id from verify_step with background: true.")], extra: &[] },
     Tool { name: "verify_plan", description: "Run verify_step for each step of a saved plan that carries file content, in order, stopping at the first failure, and store each outcome on its step. Steps without content count as done. The whole call stops after 600 s with timed_out.",
         params: &[PLAN_ID], extra: &[VERIFY] },
-    Tool { name: "record_steps", description: "Set the status of plan steps, e.g. after verify_step passes. Unknown ids are listed in not_found.",
+    Tool { name: "record_steps", description: "Set the status of plan steps, e.g. skipped (verify_step already marks a passing step passed). Unknown ids are listed in not_found.",
         params: &[("steps", "steps", true, "[{step_id, status}]. step_id is the step `id` from get_plan. Status: pending, running, passed, failed or skipped.")], extra: &[] },
     Tool { name: "claim_step", description: "Claim a step for one agent so others skip it. Refused (step_blocked) until the steps it depends on are passed or skipped. A claim expires after 10 minutes; claiming again refreshes it.",
         params: &[("plan_id", "integer", true, "Plan id."), STEP_ID, AGENT_ID], extra: &[] },

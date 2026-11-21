@@ -238,8 +238,9 @@ pub fn generate_steps(
     let mut file_to_step = BTreeMap::new();
     for filepath in file_order {
         let role = roles.get(filepath).copied();
-        // A file the goal names gets a step even when it defines nothing.
-        let named = role.map(|r| r.starts_with("named")).unwrap_or(false);
+        // A file the goal names gets a step even when it defines nothing
+        // (or does not exist yet).
+        let named = role.map(|r| r.starts_with("named") || r == "create").unwrap_or(false);
         let names = match symbols.get(filepath) {
             Some(names) if !names.is_empty() => names,
             _ if named => &empty,
