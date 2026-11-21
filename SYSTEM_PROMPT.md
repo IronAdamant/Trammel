@@ -15,17 +15,17 @@ Use it for changes that span several files, for work you may hand to another age
 ## The loop
 
 1. `get_constraints` and `get_recipe(goal)`: read rules and any strategy that worked for a similar goal.
-2. `start_plan(goal)`: keep the `plan_id`. Pass `summary_only: true` for a short reply; the saved plan still has every step.
-3. For each step, in order: edit the file, then `verify_step(edits: [{path, content}], plan_id, step_id)` with the whole new content of each changed file. The outcome is stored on the step. If `success` is false, read `failed_tests` (each failed test's message), `preflight.issues` or `trace`, fix, and verify again. `left_behind` lists files the run created, changed or deleted in the copy, including a change of line endings only.
+2. `start_plan(goal)`: keep the `plan_id`. Each step in the reply has its `id`, so you need no `get_plan`. Pass `summary_only: true` for a short reply (a `steps` list of id, file and description); the saved plan still has every step.
+3. For each step, in order: edit the file (a step with `action: "create"` is a new file), then `verify_step(edits: [{path, content}], plan_id, step_id)` with the whole new content of each changed file. The outcome is stored on the step, and a pass marks it `passed`. If `success` is false, read `failed_tests` (each failed test's message), `preflight.issues` or `trace`, fix, and verify again. `left_behind` lists files the run created, changed or deleted in the copy, including a change of line endings only.
 4. Before a push, `verify_step(ref: "HEAD")` runs the tests on a clean checkout of the commit, with the line endings a fresh checkout gets.
 5. Record what you learn: `add_constraint` for a rule the next agent must follow, `resolve_failure` for what fixed an error.
-6. `complete_plan(plan_id)` when done (`outcome: false` if you gave up). It saves the strategy as a recipe.
+6. `complete_plan(plan_id, verify: true, note)` when done: it runs the tests, adds `note` as the handoff note and closes the plan in one call. If the tests fail the plan stays open (`completed: false`). `outcome: false` if you gave up. It saves the strategy as a recipe.
 
 ## Handing off
 
 - Before you stop, `add_note(plan_id, text)`: what you did, what is left, what to watch out for. Name files and functions.
 - Give the next agent the `plan_id`. It calls `resume(plan_id)` and gets the steps with their status, claims and last verify outcome (`verification`), all notes oldest first, and `next_step`: the first step without a passing verify.
-- Steps the plan has not reached are `pending`. Mark progress with `record_steps(steps: [{step_id, status}])`, status `passed`, `failed`, `skipped`, `running` or `pending`.
+- Steps the plan has not reached are `pending`. A passing `verify_step` marks its step `passed` (a later failure marks it `failed`). Mark other progress with `record_steps(steps: [{step_id, status}])`, status `passed`, `failed`, `skipped`, `running` or `pending`.
 
 ## Several agents on one plan
 
@@ -33,7 +33,7 @@ These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name 
 
 - `available_steps(plan_id, agent_id)` returns the steps you can take now: pending or running, not claimed by another agent, and every step they depend on `passed` or `skipped`.
 - `claim_step(plan_id, step_id, agent_id)` before you start. A claim held by someone else returns `claim_held`, and a step whose dependencies are not done returns `step_blocked` with the blocking step ids; pick another step. Claims expire after 10 minutes; claiming again refreshes yours.
-- `record_steps` when a step passes, then `release_step(step_id, agent_id)`.
+- `verify_step` with the step's `plan_id` and `step_id` marks it passed, then `release_step(step_id, agent_id)`.
 - Use a stable `agent_id` per agent, such as its role or session name.
 
 ## Conventions
@@ -45,6 +45,8 @@ These tools are listed with `TRAMMEL_MCP_SURFACE=all`, and are callable by name 
 - **Test command.** `verify_step` uses its `test_cmd` argument, then `test_cmd` from `.trammel.json`, then the language default (`python -m unittest`, `cargo test`, `npm test`, `go test ./...`, ...). Output is capped at 4 KB (head and tail) unless `full_output` is true.
 - **Time limit.** `timeout_s`, else `verify_timeout_s` in `.trammel.json`, else 300 seconds. A call that waits is capped at 600 seconds. For a longer run (a cold build of a large workspace) pass `background: true`: the reply is a `job_id` at once; call `job_status(job_id, wait_s)` until `status` is `completed`, and `cancel_job` to stop it. A run past its limit answers `timed_out: true` with `elapsed_s` and a hint. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed.
 - **Named files.** Name the files in the goal (`crates/app/src/sight.rs`, `game.rs`, `` `timeline` ``, `app::sight`) or pass `files`. The plan starts from them (`role: named`, relevance 1.0), adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests. `analysis_meta` reports `named_files`, and `unresolved_files` or `ambiguous_files` when a name matched no file or several.
+- **New files.** When the goal asks to create, add, implement or write something, a named path that does not exist yet (`minisql/sql/parser.py`, or `parser.py` next to the other named files) is a step with `role: create` and `action: create`, listed in `analysis_meta.new_files`. Its place in the order comes from the goal's words ("parser.py uses lexer.py and nodes.py", "depends on", "imported by"), a test after the file it is named after, a package `__init__.py` / `mod.rs` / `index.ts` after the new files in its directory, then shared foundations first (errors, types, config, models, schema, nodes, ...), existing files before new ones, and the order you named them. Without a creating verb a missing path stays in `unresolved_files`.
+- **Cached passes.** `verify_step` keeps its last passing runs beside the copy. When the same command, edits and `ref` meet the same files (same list, size and modification time, and content for files changed within two seconds of the run), the reply is that run with `cached: {at, note}`. Installed packages and environment variables are not checked: pass `rerun: true` when they changed.
 - **Large repos.** Without named files, a plan keeps the 15 files most relevant to the goal, code first and tests after. Pass `scope` (a subdirectory) or `focus_globs` to aim it, or `expand_repo: false` to lift the cap. `estimate` counts files first.
 
 ## Tool groups
@@ -96,7 +98,7 @@ Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). 
 | `add_constraint` | **constraint_type**, context, **description**, plan_id, step_id | Record a rule or known-bad approach (e.g. do not edit generated files) so every later agent sees it via get_constraints. |
 | `add_note` | agent_id, **plan_id**, step_id, **text** | Leave a free-text note on a plan for whoever picks it up next: what you did, what is left, what to watch out for. get_plan and resume return the notes. |
 | `cancel_job` | **job_id** | Stop a running verify_step background job; its test command is killed. job_status then returns the cancelled result. |
-| `complete_plan` | outcome, **plan_id** | Close a plan as completed (or failed) and save its strategy as a recipe for similar goals. Step statuses are left as they are. |
+| `complete_plan` | note, outcome, **plan_id**, ref, test_cmd, verify | Close a plan as completed (or failed) and save its strategy as a recipe for similar goals. verify: true runs the tests first (the plan stays open if they fail); note adds a handoff note. |
 | `decompose` | expand_repo, files, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, relevant_only, scope, strict_greenfield, summary_only, suppress_creation_hints | Plan a change without saving it: which files it touches and in what order (dependencies first, tests last), with goal relevance and each file's role (named, dependency, dependent, test). Read-only. Same options as start_plan. Not worth it for a single-file fix. full: true adds symbols and the import graph. |
 | `export_plan` | path, **plan_id** | Return a saved plan as a trammel.plan document (steps with their id and last verification), and write it to path when given. |
 | `get_constraints` | constraint_type | List active constraints. Read these before editing. |
@@ -105,9 +107,9 @@ Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). 
 | `job_status` | **job_id**, wait_s | State of a verify_step background job: running (with elapsed_s), completed or cancelled (with the verify result), or not_found. wait_s waits here, up to 600 s, for it to finish. |
 | `resume` | full, **plan_id** | get_plan plus next_step: the first step with no passing verify_step (and not passed or skipped). Use it to continue a plan after a context summary or a handoff. |
 | `save_recipe` | **goal**, outcome, strategy | Save a strategy that worked so get_recipe can return it for similar goals. |
-| `start_plan` | expand_repo, files, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, persist, relevant_only, scope, strategy, strict_greenfield, summary_only, suppress_creation_hints | Plan a change that spans several files and save it. Use it when the files must change in dependency order, or when another agent or a later session will continue the work (get_plan, add_note). Skip it for a one- or two-file edit you can make now. Name the files in the goal or pass files: the plan starts from them, adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests, each step with a role. Without named files it ranks the whole repo by goal words (15 files). Returns plan_id. |
+| `start_plan` | expand_repo, files, focus_globs, focus_keywords, full, **goal**, language, max_files, max_steps, num_beams, persist, relevant_only, scope, strategy, strict_greenfield, summary_only, suppress_creation_hints | Plan a change that spans several files and save it. Use it when the files must change in dependency order, or when another agent or a later session will continue the work (get_plan, add_note). Skip it for a one- or two-file edit you can make now. Name the files in the goal or pass files: the plan starts from them, adds a few direct dependencies, dependents and tests ranked below them, and lists code before tests, each step with a role. Without named files it ranks the whole repo by goal words (15 files). Returns plan_id and each step's id. |
 | `status` | none | Store location and counts of plans, steps, recipes, constraints and failures. |
-| `verify_step` | background, edits, full_output, language, plan_id, ref, step_id, test_cmd, timeout_s | Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, to check the commit you will push (ref: HEAD, a clean checkout), or when other agents share your working tree. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. The reply has copy.path and copy.longest_path (refused past Windows' 259 characters), left_behind (files the run created, changed, deleted, or whose line endings changed), and for a failure failed_tests with each test's message. With plan_id and step_id the outcome is stored on that step. Unbalanced brackets fail at once. Long runs: background: true and job_status. Output capped at 4 KB. |
+| `verify_step` | background, edits, full_output, language, plan_id, ref, rerun, step_id, test_cmd, timeout_s | Run the tests against edits in a copy of the project; the real tree is never touched. Use it to check an edit before writing it, to check the commit you will push (ref: HEAD, a clean checkout), or when other agents share your working tree. The copy and its cargo target dir are kept per project, so later runs rebuild only what changed. The reply has copy.path and copy.longest_path (refused past Windows' 259 characters), left_behind (files the run created, changed, deleted, or whose line endings changed), and for a failure failed_tests with each test's message. With plan_id and step_id the outcome is stored on that step; a pass marks it passed. An unchanged earlier pass of the same command is returned with cached. Unbalanced brackets fail at once. Long runs: background: true and job_status. Output capped at 4 KB. |
 
 ### Advanced tools (`TRAMMEL_MCP_SURFACE=all`; always callable by name)
 
@@ -126,7 +128,7 @@ Use `trammel: tools <groups>` instead to keep only what you name (plus `core`). 
 | `merge_plans` | **plan_a_id**, **plan_b_id**, strategy | Save a new plan whose steps are plan A's then plan B's (or interleaved). |
 | `prune_plans` | max_age_days, status | Delete plans not updated for max_age_days with the given status, plus their steps, notes, trajectories and constraints. Returns removed. |
 | `prune_recipes` | max_age_days, min_success_ratio | Delete recipes not updated for max_age_days whose success ratio is below min_success_ratio (or that never succeeded). Returns removed. |
-| `record_steps` | **steps** | Set the status of plan steps, e.g. after verify_step passes. Unknown ids are listed in not_found. |
+| `record_steps` | **steps** | Set the status of plan steps, e.g. skipped (verify_step already marks a passing step passed). Unknown ids are listed in not_found. |
 | `release_step` | **agent_id**, **step_id** | Drop your claim on a step so another agent can take it. |
 | `resolve_failure` | **error_type**, **file_path**, plan_id, **resolution**, step_id | Record what fixed an error in a file, so failure_history can tell the next agent. |
 | `update_plan_status` | **plan_id**, **status** | Set a plan's status, e.g. failed when abandoning it. |

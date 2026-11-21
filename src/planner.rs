@@ -113,17 +113,18 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     let (hybrid, naming, shared, patterned) = engine.hybrid(&graph, &all);
     let blind = naming + shared + patterned;
     let mut relevant = BTreeMap::new();
-    for (file, deps) in &hybrid {
+    for (file, deps) in &agreeing(&hybrid, &graph, &all) {
         if all.contains(file) {
             relevant.insert(file.clone(), deps.iter().filter(|d| all.contains(*d)).cloned().collect());
         }
     }
     let about_tests = goal_is_about_tests(&keywords);
-    let named = resolve_named(&refs, &request.files, &all, scope.as_deref(), &analysis_root, &language, &anchors, &anchor_words);
+    let mut named = resolve_named(&refs, &request.files, &all, scope.as_deref(), &analysis_root, &language, &anchors, &anchor_words);
+    let new_files = take_new_files(&mut named, &request.goal, scope.as_deref());
     let known = all.clone();
     let mut roles: BTreeMap<String, &'static str> = BTreeMap::new();
     let mut truncated = false;
-    let order: Vec<String> = if !named.seeds.is_empty() {
+    let order: Vec<String> = if !named.seeds.is_empty() || !new_files.is_empty() {
         // The goal names its files: plan those, plus a few direct
         // dependencies, dependents and tests ranked below them.
         // Neighbours come from real imports only: inferred edges link a
@@ -138,6 +139,12 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         relevant = graph.clone();
         relevant.retain(|k, _| allowed.contains(k));
         for deps in relevant.values_mut() { deps.retain(|d| allowed.contains(d)); }
+        if !new_files.is_empty() {
+            let edges = new_file_edges(&request.goal, &order, &new_files, &relevant);
+            order = order_with_new_files(&order, &new_files, &relevant, &edges);
+            for (file, deps) in edges { relevant.entry(file).or_default().extend(deps); }
+            for file in &new_files { roles.insert(file.clone(), "create"); }
+        }
         order
     } else {
         let mut order = topological_sort(&relevant);
@@ -163,7 +170,8 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
         core.into_iter().chain(tests).collect()
     };
     let mut steps = score::generate_steps(&order, &symbols, &relevant, &request.goal, &keywords, &anchors, &roles);
-    rank_by_role(&mut steps, !named.seeds.is_empty(), about_tests);
+    describe_new_files(&mut steps, &relevant);
+    rank_by_role(&mut steps, !named.seeds.is_empty() || !new_files.is_empty(), about_tests);
     if request.relevant_only && (!keywords.is_empty() || !named.seeds.is_empty()) {
         // Most relevant first, still code before tests.
         steps.sort_by(|a, b| {
@@ -201,6 +209,10 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     ]);
     if truncated { canon::insert(&mut meta, "max_files_truncated", Value::Bool(true)); }
     named.annotate(&mut meta);
+    if !new_files.is_empty() {
+        canon::insert(&mut meta, "plan_source", Value::string("named_files"));
+        canon::insert(&mut meta, "new_files", Value::Array(new_files.iter().cloned().map(Value::String).collect()));
+    }
     if !anchors.is_empty() { canon::insert(&mut meta, "anchors", Value::Array(anchors.iter().cloned().map(Value::String).collect())); }
     let mut result = canon::obj(vec![
         ("goal", Value::string(request.goal.clone())),
@@ -223,8 +235,9 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     ]);
     if !request.suppress_creation_hints {
         let ranked = canon::get(&result, "steps").and_then(canon::as_array).map(|s| s.to_vec()).unwrap_or_default();
-        let files = if named.seeds.is_empty() { &all } else { &known };
-        if let Some(hints) = creation_hints(&request.goal, &keywords, files, &language, &ranked) {
+        let mut files = if named.seeds.is_empty() && new_files.is_empty() { all.clone() } else { known.clone() };
+        files.extend(new_files.iter().cloned());
+        if let Some(hints) = creation_hints(&request.goal, &keywords, &files, &language, &ranked) {
             canon::insert(&mut result, "creation_hints", hints);
         }
     }
@@ -240,6 +253,34 @@ pub fn decompose(request: &Request) -> Result<Value, String> {
     }
     let _ = analysis_root;
     Ok(result)
+}
+
+/// The hybrid graph with the inferred edges that could put a file before
+/// one it really imports left out. Step order follows real imports: an
+/// inferred edge a -> b is kept when b sits at a lower import level than a
+/// (level 0 imports nothing in the project, level n imports something at
+/// n - 1), or when a has no real import edge in or out. Real edges are all
+/// kept.
+fn agreeing(hybrid: &BTreeMap<String, Vec<String>>, real: &BTreeMap<String, Vec<String>>, files: &BTreeSet<String>) -> BTreeMap<String, Vec<String>> {
+    let inside = |f: &String| files.contains(f);
+    let real: BTreeMap<String, Vec<String>> = real.iter().filter(|(k, _)| inside(k)).map(|(k, v)| (k.clone(), v.iter().filter(|d| inside(d) && *d != k).cloned().collect())).collect();
+    // In topological order, so a file's imports have their level already
+    // (in an import cycle, the later file's edge back is not counted).
+    let mut level: BTreeMap<String, usize> = BTreeMap::new();
+    for file in topological_sort(&real) {
+        let lvl = real.get(&file).map(|deps| deps.iter().filter_map(|d| level.get(d)).map(|l| l + 1).max().unwrap_or(0)).unwrap_or(0);
+        level.insert(file, lvl);
+    }
+    let linked: BTreeSet<&str> = real.iter().filter(|(_, v)| !v.is_empty()).flat_map(|(k, v)| std::iter::once(k.as_str()).chain(v.iter().map(|d| d.as_str()))).collect();
+    let mut out = BTreeMap::new();
+    for (file, deps) in hybrid {
+        let own: BTreeSet<&String> = real.get(file).map(|d| d.iter().collect()).unwrap_or_default();
+        let free = !linked.contains(file.as_str());
+        let mine = level.get(file).copied().unwrap_or(0);
+        let kept: Vec<String> = deps.iter().filter(|d| own.contains(d) || free || level.get(*d).copied().unwrap_or(0) < mine).cloned().collect();
+        out.insert(file.clone(), kept);
+    }
+    out
 }
 
 /// Cut `order` to `limit` files. With goal keywords, keep the files with the
@@ -318,7 +359,7 @@ impl Named {
             canon::insert(meta, "ambiguous_files", Value::Object(self.ambiguous.iter().map(|(k, v)| (k.clone(), Value::Array(v.iter().cloned().map(Value::String).collect()))).collect()));
         }
         if !self.unresolved.is_empty() || !self.ambiguous.is_empty() {
-            canon::insert(meta, "named_files_hint", Value::string("Pass files as paths relative to project_root (or to scope) to plan from them exactly"));
+            canon::insert(meta, "named_files_hint", Value::string("Pass files as paths relative to project_root (or to scope) to plan from them exactly. A path that does not exist yet is planned as a new file (role create) when the goal asks to create, add, implement or write something"));
         }
     }
 }
@@ -523,6 +564,205 @@ fn seeded_plan(seeds: &[String], graph: &BTreeMap<String, Vec<String>>, symbols:
     out
 }
 
+/// Paths the goal or `files` names that match no file, taken out of
+/// `unresolved` as files to create, when the goal asks to create, add,
+/// implement or write something and the path ends in a file name with an
+/// extension. A bare name (parser.py) goes in the directory that every
+/// other named path shares, else at the analysis root. Order: as named.
+fn take_new_files(named: &mut Named, goal: &str, scope: Option<&str>) -> Vec<String> {
+    if !goal::has_creation_intent(goal) { return Vec::new(); }
+    let looks_new = |p: &str| p.rsplit('/').next().map(|n| n.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && !ext.is_empty())).unwrap_or(false);
+    let prefix = scope.filter(|s| !s.is_empty()).map(|s| format!("{}/", crate::walk::norm_slash(s)));
+    let strip = |p: &str| -> String {
+        let p = p.trim_start_matches("./").to_string();
+        match &prefix { Some(pre) => p.strip_prefix(pre.as_str()).map(String::from).unwrap_or(p), None => p }
+    };
+    let (picked, kept): (Vec<String>, Vec<String>) = named.unresolved.drain(..).partition(|p| looks_new(p));
+    named.unresolved = kept;
+    let picked: Vec<String> = picked.iter().map(|p| strip(p)).collect();
+    let dirs: BTreeSet<String> = named.seeds.iter().chain(picked.iter()).filter_map(|p| p.rsplit_once('/').map(|(d, _)| d.to_string())).collect();
+    let home = if dirs.len() == 1 { dirs.into_iter().next() } else { None };
+    let mut out: Vec<String> = Vec::new();
+    for path in picked {
+        let path = match (&home, path.contains('/')) {
+            (Some(dir), false) => format!("{dir}/{path}"),
+            _ => path,
+        };
+        if !out.contains(&path) && !named.seeds.contains(&path) { out.push(path); }
+    }
+    out
+}
+
+/// Words in a goal that say one file uses another: "parser.py imports
+/// lexer.py", "the executor uses the planner and nodes". The named file
+/// nearest before the verb imports each named file after it, up to the next
+/// verb or the end of the sentence. "used by" / "imported by" / "called by"
+/// turn it round.
+const USES: &[&str] = &["imports", "import", "uses", "use", "using", "needs", "need", "calls", "call", "extends", "extend", "wraps", "wrap", "requires", "require"];
+const USED_BY: &[&str] = &["used by", "imported by", "called by", "needed by", "required by", "wrapped by", "extended by"];
+const USES_PHRASES: &[&str] = &["depends on", "depend on", "builds on", "build on", "on top of"];
+
+/// The edges new files will need, as (importer, imported) among the planned
+/// files: from the goal's words (`USES`), plus these conventions: a test
+/// imports the file it is named after (test_parser.py -> parser.py), and a
+/// package entry file (`__init__.py`, `mod.rs`, `lib.rs`, `index.ts`,
+/// `index.js`) imports the new files in its own directory.
+fn new_file_edges(goal: &str, planned: &[String], new_files: &[String], real: &BTreeMap<String, Vec<String>>) -> BTreeMap<String, Vec<String>> {
+    let every: Vec<String> = planned.iter().chain(new_files.iter()).cloned().collect();
+    let mut edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let add = |from: &str, to: &str, edges: &mut BTreeMap<String, Vec<String>>| {
+        if from == to { return; }
+        // An existing file's real imports are already known.
+        if !new_files.iter().any(|n| n == from || n == to) { return; }
+        if real.get(from).is_some_and(|d| d.iter().any(|x| x == to)) { return; }
+        let deps = edges.entry(from.to_string()).or_default();
+        if !deps.iter().any(|d| d == to) { deps.push(to.to_string()); }
+    };
+    for (from, to) in goal_edges(goal, &every) { add(&from, &to, &mut edges); }
+    for file in new_files {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        let dir = file.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        if score::is_test_file(file) {
+            let stem = score::tested_stem(file);
+            for other in every.iter().filter(|o| !score::is_test_file(o)) {
+                let other_stem = other.rsplit('/').next().unwrap_or(other).split('.').next().unwrap_or("");
+                if other_stem == stem { add(file, other, &mut edges); }
+            }
+        }
+        if matches!(name, "__init__.py" | "mod.rs" | "lib.rs" | "index.ts" | "index.js") {
+            for other in new_files.iter().filter(|o| *o != file && !score::is_test_file(o)) {
+                if other.rsplit_once('/').map(|(d, _)| d).unwrap_or("") == dir { add(file, other, &mut edges); }
+            }
+        }
+    }
+    edges
+}
+
+/// What `goal_edges` finds in the goal text, by position.
+#[derive(Clone, Debug)]
+enum Mark {
+    File(String),
+    /// A `USES` verb, or a `USED_BY` one (true: the subject is imported).
+    Verb(bool),
+    End,
+}
+
+/// (importer, imported) pairs the goal's words state among `files`.
+fn goal_edges(goal: &str, files: &[String]) -> Vec<(String, String)> {
+    let lower = goal.to_lowercase();
+    let bounded = |start: usize, end: usize| {
+        let edge = |c: Option<char>| c.map(|c| !(c.is_alphanumeric() || c == '_')).unwrap_or(true);
+        edge(lower[..start].chars().next_back()) && edge(lower[end..].chars().next())
+    };
+    let find = |needle: &str| -> Vec<(usize, usize)> {
+        let mut hits = Vec::new();
+        let mut from = 0;
+        while let Some(pos) = lower[from..].find(needle) {
+            let (start, end) = (from + pos, from + pos + needle.len());
+            if bounded(start, end) { hits.push((start, end)); }
+            from = end;
+        }
+        hits
+    };
+    // A file is mentioned by its path, its file name, or its stem as a whole
+    // word; the longest mention at a place wins.
+    let mut spans: Vec<(usize, usize, Mark)> = Vec::new();
+    let taken = |start: usize, end: usize, mark: Mark, spans: &mut Vec<(usize, usize, Mark)>| {
+        if spans.iter().any(|m| m.0 < end && start < m.1) { return; }
+        spans.push((start, end, mark));
+    };
+    let mut forms: Vec<(String, String)> = Vec::new();
+    for file in files {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        let stem = name.split('.').next().unwrap_or(name);
+        forms.push((file.to_lowercase(), file.clone()));
+        forms.push((name.to_lowercase(), file.clone()));
+        if !matches!(stem, "__init__" | "mod" | "lib" | "index" | "main") && stem.len() > 2 { forms.push((stem.to_lowercase(), file.clone())); }
+    }
+    forms.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.0.cmp(&b.0)));
+    for (form, file) in &forms {
+        for (start, end) in find(form) { taken(start, end, Mark::File(file.clone()), &mut spans); }
+    }
+    let mut verbs: Vec<(&str, bool)> = USED_BY.iter().map(|v| (*v, true)).chain(USES_PHRASES.iter().chain(USES.iter()).map(|v| (*v, false))).collect();
+    verbs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    for (verb, reversed) in verbs {
+        for (start, end) in find(verb) { taken(start, end, Mark::Verb(reversed), &mut spans); }
+    }
+    // A sentence ends at ; ! ? or a line end, and at . or : before a space.
+    let bytes = lower.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        let spaced = bytes.get(i + 1).map(|c| c.is_ascii_whitespace()).unwrap_or(true);
+        if matches!(b, b';' | b'!' | b'?' | b'\n') || (matches!(b, b'.' | b':') && spaced) { taken(i, i + 1, Mark::End, &mut spans); }
+    }
+    spans.sort_by_key(|m| m.0);
+    let mut out = Vec::new();
+    let mut last: Option<String> = None;
+    let mut subject: Option<(String, bool)> = None;
+    for (_, _, mark) in spans {
+        match mark {
+            Mark::End => { last = None; subject = None; }
+            Mark::Verb(reversed) => subject = last.clone().map(|s| (s, reversed)),
+            Mark::File(file) => {
+                if let Some((s, reversed)) = &subject {
+                    let pair = if *reversed { (file.clone(), s.clone()) } else { (s.clone(), file.clone()) };
+                    if pair.0 != pair.1 && !out.contains(&pair) { out.push(pair); }
+                }
+                last = Some(file);
+            }
+        }
+    }
+    out
+}
+
+/// The planned files with the new ones merged in. What a file imports comes
+/// first (the real imports and `edges`); among files that are ready, code
+/// before tests, then shared foundations (`FOUNDATION` stems such as errors,
+/// types, config, models), then existing files before new ones, then the
+/// order they were planned or named in.
+fn order_with_new_files(order: &[String], new_files: &[String], real: &BTreeMap<String, Vec<String>>, edges: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+    let nodes: Vec<&String> = order.iter().chain(new_files.iter()).collect();
+    let index: BTreeMap<&str, usize> = nodes.iter().enumerate().map(|(i, f)| (f.as_str(), i)).collect();
+    let key = |i: usize| {
+        let file = nodes[i];
+        let stem = file.rsplit('/').next().unwrap_or(file).split('.').next().unwrap_or("").to_lowercase();
+        (score::is_test_file(file), !FOUNDATION.contains(&stem.as_str()), i >= order.len(), i)
+    };
+    let mut deps: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); nodes.len()];
+    for (i, file) in nodes.iter().enumerate() {
+        for dep in real.get(*file).into_iter().flatten().chain(edges.get(*file).into_iter().flatten()) {
+            if let Some(&j) = index.get(dep.as_str()) { if j != i { deps[i].insert(j); } }
+        }
+    }
+    let mut done = vec![false; nodes.len()];
+    let mut out = Vec::with_capacity(nodes.len());
+    while out.len() < nodes.len() {
+        let open: Vec<usize> = (0..nodes.len()).filter(|i| !done[*i]).collect();
+        let ready: Vec<usize> = open.iter().copied().filter(|i| deps[*i].iter().all(|d| done[*d])).collect();
+        // In a cycle nothing is ready: take the first open file by the same key.
+        let pick = ready.iter().chain(if ready.is_empty() { open.iter() } else { [].iter() }).copied().min_by_key(|i| key(*i)).unwrap();
+        done[pick] = true;
+        out.push(nodes[pick].clone());
+    }
+    out
+}
+
+/// File stems that usually import nothing else in the project, so a new one
+/// is planned first when nothing else says otherwise.
+const FOUNDATION: &[&str] = &["errors", "error", "exceptions", "types", "constants", "config", "settings", "utils", "util", "helpers", "base", "models", "schema", "nodes", "ast", "tokens"];
+
+/// A create step says what to create and what it will import.
+fn describe_new_files(steps: &mut [Value], graph: &BTreeMap<String, Vec<String>>) {
+    for step in steps.iter_mut() {
+        if canon::get(step, "role").and_then(canon::as_str) != Some("create") { continue; }
+        let file = canon::get(step, "file").and_then(canon::as_str).unwrap_or("").to_string();
+        let deps = graph.get(&file).cloned().unwrap_or_default();
+        let text = if deps.is_empty() { format!("Create {file}") } else { format!("Create {file}; it imports {}", deps.join(", ")) };
+        canon::insert(step, "description", Value::string(text));
+        canon::insert(step, "action", Value::string("create"));
+        canon::insert(step, "rationale", Value::string("New file named in the goal; it does not exist yet"));
+    }
+}
+
 /// `files` in dependency order (what a file imports comes before it), using
 /// only the edges among them.
 fn dependency_order(files: &[String], graph: &BTreeMap<String, Vec<String>>) -> Vec<String> {
@@ -543,7 +783,7 @@ fn rank_by_role(steps: &mut [Value], seeded: bool, about_tests: bool) {
         let role = canon::get(step, "role").and_then(canon::as_str).unwrap_or("").to_string();
         let r = canon::get(step, "relevance").and_then(canon::as_f64);
         let next = match role.as_str() {
-            "named" | "named_test" => Some(1.0),
+            "named" | "named_test" | "create" => Some(1.0),
             "dependency" | "dependent" => Some(0.2 + 0.4 * r.unwrap_or(0.0)),
             "test" if seeded => Some(0.1 + 0.3 * r.unwrap_or(0.0)),
             "test" if !about_tests => r.map(|r| r * 0.5),
@@ -1099,5 +1339,106 @@ mod named_tests {
         assert_eq!(refs.paths, vec!["src/a/b.py", "game.rs"]);
         assert_eq!(refs.stems, vec!["sight", "timeline"]);
         assert!(refs.modules.contains(&vec!["engine".to_string(), "game".to_string(), "Ctx".to_string()]));
+    }
+}
+
+#[cfg(test)]
+mod new_file_tests {
+    use super::*;
+
+    fn write(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn project(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trammel-new-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir, "minisql/errors.py", "class Error(Exception): pass\n");
+        write(&dir, "minisql/schema.py", "from minisql.errors import Error\nclass TableSchema: pass\n");
+        dir
+    }
+
+    fn plan(result: &Value) -> Vec<(String, String, Vec<i64>)> {
+        canon::get(result, "steps").and_then(canon::as_array).unwrap().iter().map(|s| (
+            canon::get(s, "file").and_then(canon::as_str).unwrap().to_string(),
+            canon::get(s, "role").and_then(canon::as_str).unwrap_or("").to_string(),
+            canon::get(s, "depends_on").and_then(canon::as_array).unwrap().iter().filter_map(canon::as_i64).collect(),
+        )).collect()
+    }
+
+    #[test]
+    fn files_that_do_not_exist_yet_are_create_steps_in_import_order() {
+        let dir = project("greenfield");
+        let goal = "Implement the SQL frontend: create minisql/sql/__init__.py, minisql/sql/parser.py, minisql/sql/lexer.py and minisql/sql/nodes.py. The parser uses the lexer and nodes and raises errors from minisql/errors.py. Add tests/test_parser.py";
+        let result = decompose(&Request::new(goal, dir.clone())).unwrap();
+        let got = plan(&result);
+        let files: Vec<&str> = got.iter().map(|s| s.0.as_str()).collect();
+        // Existing files first (schema.py imports the named errors.py), then
+        // the new ones, each after what it will import, tests last.
+        assert_eq!(files, vec!["minisql/errors.py", "minisql/schema.py", "minisql/sql/nodes.py", "minisql/sql/lexer.py", "minisql/sql/parser.py", "minisql/sql/__init__.py", "tests/test_parser.py"], "{got:?}");
+        assert!(got[2..].iter().all(|s| s.1 == "create"), "{got:?}");
+        assert_eq!(got[4].2, vec![3, 2, 0], "the parser imports the lexer, nodes and errors");
+        assert_eq!(got[5].2, vec![4, 3, 2], "a package __init__ imports its new modules");
+        assert_eq!(got[6].2, vec![4], "a test imports the file it is named after");
+        let step = &canon::get(&result, "steps").and_then(canon::as_array).unwrap()[4];
+        assert_eq!(canon::get(step, "action").and_then(canon::as_str), Some("create"));
+        assert!(canon::get(step, "description").and_then(canon::as_str).unwrap().starts_with("Create minisql/sql/parser.py; it imports"));
+        let meta = canon::get(&result, "analysis_meta").unwrap();
+        assert!(canon::get(meta, "unresolved_files").is_none());
+        assert_eq!(canon::get(meta, "new_files").and_then(canon::as_array).map(|a| a.len()), Some(5));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_files_argument_and_bare_names_can_be_new_and_follow_the_named_directory() {
+        let dir = project("files");
+        let mut request = Request::new("build the storage layer; btree.py needs pager.py", dir.clone());
+        request.files = vec!["minisql/storage/btree.py".into(), "pager.py".into(), "minisql/storage/errors.py".into()];
+        let got = plan(&decompose(&request).unwrap());
+        let files: Vec<&str> = got.iter().map(|s| s.0.as_str()).collect();
+        // errors is a foundation stem: first among files nothing orders.
+        assert_eq!(files, vec!["minisql/storage/errors.py", "minisql/storage/pager.py", "minisql/storage/btree.py"], "{got:?}");
+        assert_eq!(got[2].2, vec![1]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_a_creating_verb_a_missing_path_stays_unresolved() {
+        let dir = project("typo");
+        let result = decompose(&Request::new("fix the bug in minisql/sqhema.py", dir.clone())).unwrap();
+        let meta = canon::get(&result, "analysis_meta").unwrap();
+        assert_eq!(canon::stable(canon::get(meta, "unresolved_files").unwrap()), r#"["minisql/sqhema.py"]"#);
+        assert!(plan(&result).iter().all(|s| s.1 != "create"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn goal_words_say_which_file_imports_which() {
+        let files: Vec<String> = ["a/parser.py", "a/lexer.py", "a/nodes.py", "a/cli.py"].iter().map(|s| s.to_string()).collect();
+        let pairs = goal_edges("the parser uses lexer.py and nodes. cli.py; the lexer is used by cli.py", &files);
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(pairs, vec![s("a/parser.py", "a/lexer.py"), s("a/parser.py", "a/nodes.py"), s("a/cli.py", "a/lexer.py")]);
+    }
+
+    #[test]
+    fn inferred_edges_never_put_a_file_before_one_it_really_imports() {
+        let files: BTreeSet<String> = ["planner.py", "executor.py", "nodes.py", "record.py", "loose.py"].iter().map(|s| s.to_string()).collect();
+        let mut real = BTreeMap::new();
+        real.insert("executor.py".to_string(), vec!["planner.py".to_string()]);
+        real.insert("planner.py".to_string(), vec!["nodes.py".to_string()]);
+        let mut hybrid = real.clone();
+        // Inferred: planner -> executor would invert the real order.
+        hybrid.get_mut("planner.py").unwrap().push("executor.py".into());
+        hybrid.get_mut("executor.py").unwrap().push("nodes.py".into());
+        hybrid.insert("loose.py".into(), vec!["record.py".into()]);
+        let kept = agreeing(&hybrid, &real, &files);
+        assert_eq!(kept["planner.py"], vec!["nodes.py"]);
+        assert_eq!(kept["executor.py"], vec!["planner.py", "nodes.py"], "an edge down the import levels stays");
+        assert_eq!(kept["loose.py"], vec!["record.py"], "a file no real import touches keeps its inferred edges");
+        let order = topological_sort(&kept);
+        let at = |f: &str| order.iter().position(|o| o == f).unwrap();
+        assert!(at("nodes.py") < at("planner.py") && at("planner.py") < at("executor.py") && at("record.py") < at("loose.py"), "{order:?}");
     }
 }

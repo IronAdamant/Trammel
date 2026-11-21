@@ -108,6 +108,8 @@ impl Store {
             ]);
             // Why the step is in the plan (named, dependency, test, ...).
             if let Some(role) = canon::get(step, "role").cloned() { canon::insert(&mut row, "role", role); }
+            // "create" for a file that does not exist yet.
+            if let Some(action) = canon::get(step, "action").cloned() { canon::insert(&mut row, "action", action); }
             self.table_mut("steps").push(row);
         }
         self.touch();
@@ -276,17 +278,35 @@ impl Store {
         self.rows("steps").iter().any(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id))
     }
 
-    /// Keep the latest verify_step outcome on a step (`verification`). The
-    /// step's status is left alone. False when the step is not in the plan.
-    pub fn record_verification(&mut self, plan_id: i64, step_id: i64, record: Value) -> bool {
+    /// Keep the latest verify_step outcome on a step (`verification`). A pass
+    /// marks a pending, running or failed step passed, so claim_step and
+    /// available_steps treat it as done; a failure marks a passed step
+    /// failed. Skipped and completed steps keep their status. The plan's
+    /// current_step moves to the first step not yet done, and a pending
+    /// plan becomes running. Returns the step's status, or None when the
+    /// step is not in the plan.
+    pub fn record_verification(&mut self, plan_id: i64, step_id: i64, record: Value) -> Option<String> {
+        let passed = canon::get(&record, "passed").and_then(canon::as_bool) == Some(true);
         let rows = self.table_mut("steps");
-        let Some(row) = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)) else { return false };
+        let row = rows.iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(step_id) && canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id))?;
         canon::insert(row, "verification", record);
+        let status = canon::get(row, "status").and_then(canon::as_str).unwrap_or("pending").to_string();
+        let status = match (passed, status.as_str()) {
+            (true, "pending" | "running" | "failed") => "passed".to_string(),
+            (false, "passed") => "failed".to_string(),
+            _ => status,
+        };
+        canon::insert(row, "status", Value::string(status.clone()));
+        let steps: Vec<Value> = self.rows("steps").into_iter().filter(|row| canon::get(row, "plan_id").and_then(canon::as_i64) == Some(plan_id)).cloned().collect();
+        let total = steps.len() as i64;
+        let current = next_unverified(&steps).and_then(|s| canon::get(s, "step_index")).and_then(canon::as_i64).unwrap_or(total);
         if let Some(plan) = self.table_mut("plans").iter_mut().find(|row| canon::get(row, "id").and_then(canon::as_i64) == Some(plan_id)) {
             canon::insert(plan, "updated", Value::Float(now_secs()));
+            canon::insert(plan, "current_step", Value::Int(current));
+            if canon::get(plan, "status").and_then(canon::as_str) == Some("pending") { canon::insert(plan, "status", Value::string("running")); }
         }
         self.dirty = true;
-        true
+        Some(status)
     }
 
     pub fn add_constraint(&mut self, kind: &str, description: &str, context: &Value, plan_id: Option<i64>, step_id: Option<i64>) -> i64 {
@@ -653,6 +673,28 @@ mod tests {
 
     fn step(file: &str, deps: &[i64]) -> Value {
         canon::obj(vec![("file", Value::string(file)), ("depends_on", Value::Array(deps.iter().map(|d| Value::Int(*d)).collect()))])
+    }
+
+    #[test]
+    fn a_pass_marks_the_step_passed_and_moves_the_plan_on() {
+        let (dir, mut store) = temp_store("verified");
+        let strategy = canon::obj(vec![("steps", Value::Array(vec![step("a.py", &[]), step("b.py", &[0])]))]);
+        let plan = store.create_plan("g", &strategy);
+        let ids: Vec<i64> = store.get_plan(plan).and_then(|p| canon::get(&p, "steps").and_then(canon::as_array).map(|s| s.iter().filter_map(|r| canon::get(r, "id").and_then(canon::as_i64)).collect())).unwrap();
+        let record = |passed: bool| canon::obj(vec![("passed", Value::Bool(passed))]);
+        assert_eq!(store.record_verification(plan, ids[0], record(false)).as_deref(), Some("pending"));
+        assert_eq!(store.blocking_steps(plan, ids[1]), vec![ids[0]]);
+        assert_eq!(store.record_verification(plan, ids[0], record(true)).as_deref(), Some("passed"));
+        assert!(store.blocking_steps(plan, ids[1]).is_empty(), "a passing verify unblocks dependents");
+        let row = store.get_plan(plan).unwrap();
+        assert_eq!(canon::get(&row, "current_step").and_then(canon::as_i64), Some(1));
+        assert_eq!(canon::get(&row, "status").and_then(canon::as_str), Some("running"));
+        // A later failure takes the pass back; a skipped step stays skipped.
+        assert_eq!(store.record_verification(plan, ids[0], record(false)).as_deref(), Some("failed"));
+        store.record_steps(&[canon::obj(vec![("step_id", Value::Int(ids[1])), ("status", Value::string("skipped"))])]);
+        assert_eq!(store.record_verification(plan, ids[1], record(true)).as_deref(), Some("skipped"));
+        assert_eq!(store.record_verification(plan, 999, record(true)), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn files(rows: &[Value]) -> Vec<String> {
