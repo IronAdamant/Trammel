@@ -25,23 +25,122 @@ pub fn imports(language: &str, root: &Path) -> BTreeMap<String, Vec<String>> {
     }
 }
 
-pub(crate) fn python_module_index(files: &[String]) -> (BTreeMap<String, String>, BTreeSet<String>) {
-    let mut modules = BTreeMap::new();
-    for rel in files {
-        let mut module = rel.trim_end_matches(".py").replace('/', ".");
-        if let Some(stripped) = module.strip_suffix(".__init__") {
-            module = stripped.to_string();
-        }
-        modules.insert(module, rel.clone());
-    }
-    let module_set = modules.keys().cloned().collect();
-    (modules, module_set)
+/// Python modules by dotted name, and what each package `__init__.py`
+/// re-exports. A file is known by its path (`pkg/sub/mod.py` is
+/// `pkg.sub.mod`, `pkg/__init__.py` is `pkg`), and also without a leading
+/// `src/` (the src layout), and under the analyzed directory's own name when
+/// that directory is itself a package (it has an `__init__.py`), so a scoped
+/// analysis still resolves `import pkg.x`.
+pub(crate) struct PyIndex {
+    modules: BTreeMap<String, String>,
+    /// package `__init__.py` -> (name it re-exports -> file that defines
+    /// it), from the package's `from .x import a, b` lines.
+    exports: BTreeMap<String, BTreeMap<String, String>>,
 }
 
-pub(crate) fn python_file_deps(source: &str, rel: &str, module_set: &BTreeSet<String>, modules: &BTreeMap<String, String>) -> BTreeSet<String> {
+impl PyIndex {
+    pub(crate) fn build(root: &Path, files: &[String], read: impl Fn(&str) -> Option<String>) -> PyIndex {
+        let mut modules = BTreeMap::new();
+        let mut alias = BTreeMap::new();
+        let own = root.join("__init__.py").is_file().then(|| root.file_name().map(|n| n.to_string_lossy().into_owned())).flatten();
+        for rel in files {
+            let module = module_of(rel);
+            if let Some(rest) = module.strip_prefix("src.") { alias.insert(rest.to_string(), rel.clone()); }
+            if let Some(name) = &own {
+                let full = if module.is_empty() { name.clone() } else { format!("{name}.{module}") };
+                alias.insert(full, rel.clone());
+            }
+            modules.insert(module, rel.clone());
+        }
+        // A real module path wins over an alias that spells the same name.
+        for (name, rel) in alias { modules.entry(name).or_insert(rel); }
+        let mut index = PyIndex { modules, exports: BTreeMap::new() };
+        let mut exports = BTreeMap::new();
+        for rel in files.iter().filter(|r| r.ends_with("__init__.py")) {
+            let Some(source) = read(rel) else { continue };
+            let mut names = BTreeMap::new();
+            for stmt in python_import_stmts(&source) {
+                let Some(base) = index.base(&stmt, rel) else { continue };
+                for name in stmt.names.iter().filter(|n| n.as_str() != "*") {
+                    if let Some(file) = index.modules.get(&join(&base, name)).or_else(|| index.longest(&base)) {
+                        if file != rel { names.insert(name.clone(), file.clone()); }
+                    }
+                }
+            }
+            if !names.is_empty() { exports.insert(rel.clone(), names); }
+        }
+        index.exports = exports;
+        index
+    }
+
+    /// The absolute module a statement names: `from ..x import y` in
+    /// `pkg/sub/m.py` is `pkg.x`. None when the dots climb above the root.
+    fn base(&self, stmt: &PyImport, rel: &str) -> Option<String> {
+        if stmt.level == 0 { return Some(stmt.module.clone()); }
+        let mut package: Vec<&str> = rel.trim_end_matches(".py").split('/').collect();
+        // A module's package is its directory; an __init__.py is its package.
+        package.pop();
+        for _ in 1..stmt.level { package.pop()?; }
+        let mut parts: Vec<&str> = package;
+        if !stmt.module.is_empty() { parts.extend(stmt.module.split('.')); }
+        Some(parts.join("."))
+    }
+
+    /// The longest known prefix of a dotted name (`a.b.c` -> a/b.py).
+    fn longest(&self, name: &str) -> Option<&String> {
+        let parts: Vec<&str> = name.split('.').collect();
+        (1..=parts.len()).rev().find_map(|n| self.modules.get(&parts[..n].join(".")))
+    }
+
+    /// `from pkg import name` names pkg/name.py when that module exists, else
+    /// the file pkg/__init__.py re-exports it from, else pkg/__init__.py.
+    fn imported(&self, base: &str, name: &str, deps: &mut BTreeSet<String>) {
+        if name != "*" {
+            if let Some(file) = self.modules.get(&join(base, name)) { deps.insert(file.clone()); return; }
+            if let Some(file) = self.reexport(base, name) { deps.insert(file); return; }
+        }
+        if let Some(file) = self.longest(base) { deps.insert(file.clone()); }
+    }
+
+    /// Follow `__init__.py` re-exports, a package of packages included
+    /// (at most four hops).
+    fn reexport(&self, package: &str, name: &str) -> Option<String> {
+        let mut file = self.exports.get(self.modules.get(package)?)?.get(name)?.clone();
+        for _ in 0..4 {
+            match self.exports.get(&file).and_then(|names| names.get(name)) {
+                Some(next) => file = next.clone(),
+                None => break,
+            }
+        }
+        Some(file)
+    }
+}
+
+fn module_of(rel: &str) -> String {
+    let module = rel.trim_end_matches(".py").replace('/', ".");
+    match module.strip_suffix("__init__") {
+        Some(stripped) => stripped.trim_end_matches('.').to_string(),
+        None => module,
+    }
+}
+
+fn join(base: &str, name: &str) -> String {
+    if base.is_empty() { name.to_string() } else { format!("{base}.{name}") }
+}
+
+/// The project files `rel` imports. `import a.b` names the longest known
+/// prefix of `a.b`. `from m import x` (relative `from .m import x` and
+/// `from . import x` too) names m.x when it is a module, else the file m's
+/// `__init__.py` re-exports x from, else m.
+pub(crate) fn python_file_deps(source: &str, rel: &str, index: &PyIndex) -> BTreeSet<String> {
     let mut deps = BTreeSet::new();
-    for name in python_import_names(source) {
-        resolve_py(&name, module_set, modules, &mut deps);
+    for stmt in python_import_stmts(source) {
+        let Some(base) = index.base(&stmt, rel) else { continue };
+        if stmt.from {
+            for name in &stmt.names { index.imported(&base, name, &mut deps); }
+        } else if let Some(file) = index.longest(&base) {
+            deps.insert(file.clone());
+        }
     }
     deps.remove(rel);
     deps
@@ -49,21 +148,20 @@ pub(crate) fn python_file_deps(source: &str, rel: &str, module_set: &BTreeSet<St
 
 fn python_imports(root: &Path) -> BTreeMap<String, Vec<String>> {
     let files = collect_files(root, &[".py"]);
-    let (modules, module_set) = python_module_index(&files);
+    let index = PyIndex::build(root, &files, |rel| read_lossy(&root.join(rel)));
     let mut found = Vec::new();
     let workers = worker_count(files.len());
     std::thread::scope(|scope| {
         let mut joins = Vec::with_capacity(workers);
         for worker in 0..workers {
             let files = &files;
-            let modules = &modules;
-            let module_set = &module_set;
+            let index = &index;
             joins.push(scope.spawn(move || {
                 let mut local = Vec::new();
-                for (index, rel) in files.iter().enumerate() {
-                    if index % workers != worker { continue; }
+                for (i, rel) in files.iter().enumerate() {
+                    if i % workers != worker { continue; }
                     let Some(source) = read_lossy(&root.join(rel)) else { continue };
-                    let deps = python_file_deps(&source, rel, module_set, modules);
+                    let deps = python_file_deps(&source, rel, index);
                     if !deps.is_empty() { local.push((rel.clone(), deps)); }
                 }
                 local
@@ -82,34 +180,66 @@ fn worker_count(files: usize) -> usize {
     cpus.clamp(1, files.max(1))
 }
 
-fn python_import_names(source: &str) -> Vec<String> {
+/// One import statement: `import a.b` (from: false, module a.b) or
+/// `from ..m import x, y` (from: true, level 2, module m, names x, y).
+#[derive(Debug, PartialEq)]
+pub(crate) struct PyImport {
+    from: bool,
+    level: usize,
+    module: String,
+    names: Vec<String>,
+}
+
+fn python_import_stmts(source: &str) -> Vec<PyImport> {
     let tokens = crate::lang::python::lex::lex(source);
-    let mut names = Vec::new();
+    let text = |i: usize| token_text(source, &tokens[i]);
+    let mut out = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
         skip_trivia(source, &tokens, &mut i);
         if i >= tokens.len() { break; }
-        let text = token_text(source, &tokens[i]);
-        if text == "from" {
+        let word = text(i);
+        if word == "from" {
             i += 1;
             skip_trivia(source, &tokens, &mut i);
-            while i < tokens.len() && token_text(source, &tokens[i]) == "." {
+            let mut level = 0;
+            while i < tokens.len() && !text(i).is_empty() && text(i).chars().all(|c| c == '.') {
+                level += text(i).len();
                 i += 1;
                 skip_trivia(source, &tokens, &mut i);
             }
-            if let Some(name) = dotted(source, &tokens, &mut i) {
-                names.push(name);
+            let module = if i < tokens.len() && text(i) == "import" { String::new() } else { dotted(source, &tokens, &mut i).unwrap_or_default() };
+            skip_trivia(source, &tokens, &mut i);
+            // `raise E from err` and `yield from it` are not imports.
+            if i >= tokens.len() || text(i) != "import" || (level == 0 && module.is_empty()) { continue; }
+            i += 1;
+            let mut names = Vec::new();
+            let mut parens = false;
+            while i < tokens.len() {
+                let t = text(i);
+                if t == "(" { parens = true; i += 1; continue; }
+                if t == ")" { i += 1; break; }
+                if t == "," || t.starts_with('\\') || t.starts_with('#') || (t.chars().all(|c| c.is_whitespace()) && (parens || !t.contains(['\n', '\r']))) { i += 1; continue; }
+                if t == "*" { names.push("*".to_string()); i += 1; continue; }
+                if t.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+                    if t == "as" { i += 1; skip_inline(source, &tokens, &mut i); i += 1; continue; }
+                    names.push(t.to_string());
+                    i += 1;
+                    continue;
+                }
+                break;
             }
-        } else if text == "import" {
+            out.push(PyImport { from: true, level, module, names });
+        } else if word == "import" {
             i += 1;
             loop {
                 skip_trivia(source, &tokens, &mut i);
                 let Some(name) = dotted(source, &tokens, &mut i) else { break };
-                names.push(name);
-                skip_trivia(source, &tokens, &mut i);
+                out.push(PyImport { from: false, level: 0, module: name, names: Vec::new() });
+                skip_inline(source, &tokens, &mut i);
                 skip_alias(source, &tokens, &mut i);
-                skip_trivia(source, &tokens, &mut i);
-                if i < tokens.len() && token_text(source, &tokens[i]) == "," {
+                skip_inline(source, &tokens, &mut i);
+                if i < tokens.len() && text(i) == "," {
                     i += 1;
                     continue;
                 }
@@ -119,7 +249,15 @@ fn python_import_names(source: &str) -> Vec<String> {
             i += 1;
         }
     }
-    names
+    out
+}
+
+/// Spaces and comments, not a line end.
+fn skip_inline(source: &str, tokens: &[crate::syntax::cst::Token], i: &mut usize) {
+    while *i < tokens.len() {
+        let t = token_text(source, &tokens[*i]);
+        if t.starts_with('\\') || (t.chars().all(|c| c.is_whitespace()) && !t.contains(['\n', '\r']) && !t.is_empty()) { *i += 1; } else { break; }
+    }
 }
 
 fn skip_trivia(source: &str, tokens: &[crate::syntax::cst::Token], i: &mut usize) {
@@ -140,10 +278,10 @@ fn token_text<'a>(source: &'a str, token: &crate::syntax::cst::Token) -> &'a str
 fn dotted(source: &str, tokens: &[crate::syntax::cst::Token], i: &mut usize) -> Option<String> {
     let mut parts = Vec::new();
     while *i < tokens.len() {
-        skip_trivia(source, tokens, i);
+        skip_inline(source, tokens, i);
         if *i >= tokens.len() { break; }
         let text = token_text(source, &tokens[*i]);
-        if text.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') {
+        if text.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && text != "import" {
             parts.push(text.to_string());
             *i += 1;
             if *i < tokens.len() && token_text(source, &tokens[*i]) == "." {
@@ -160,21 +298,8 @@ fn dotted(source: &str, tokens: &[crate::syntax::cst::Token], i: &mut usize) -> 
 fn skip_alias(source: &str, tokens: &[crate::syntax::cst::Token], i: &mut usize) {
     if *i < tokens.len() && token_text(source, &tokens[*i]) == "as" {
         *i += 1;
+        skip_inline(source, tokens, i);
         if *i < tokens.len() { *i += 1; }
-    }
-}
-
-fn resolve_py(name: &str, module_set: &BTreeSet<String>, modules: &BTreeMap<String, String>, deps: &mut BTreeSet<String>) {
-    if let Some(rel) = modules.get(name) {
-        if module_set.contains(name) { deps.insert(rel.clone()); return; }
-    }
-    let parts: Vec<&str> = name.split('.').collect();
-    for n in (1..=parts.len()).rev() {
-        let prefix = parts[..n].join(".");
-        if let Some(rel) = modules.get(&prefix) {
-            deps.insert(rel.clone());
-            return;
-        }
     }
 }
 
@@ -627,4 +752,79 @@ fn quote_either(text: &str) -> Option<&str> {
 
 fn parent(path: &str) -> String {
     match path.rfind('/') { Some(i) => path[..i].to_string(), None => String::new() }
+}
+
+#[cfg(test)]
+mod python_tests {
+    use super::*;
+
+    fn project(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("trammel-pyimp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in files {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        dir
+    }
+
+    fn deps(graph: &BTreeMap<String, Vec<String>>, file: &str) -> Vec<String> {
+        graph.get(file).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn statements_cover_relative_parenthesised_and_aliased_imports() {
+        let src = "import os, a.b as c\nfrom . import x\nfrom ..pkg.m import (one,\n    two as t)\nfrom .n import *\nraise E from err\nfrom m import a; import z\n";
+        let got: Vec<(bool, usize, String, Vec<String>)> = python_import_stmts(src).into_iter().map(|s| (s.from, s.level, s.module, s.names)).collect();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(got, vec![
+            (false, 0, "os".into(), vec![]),
+            (false, 0, "a.b".into(), vec![]),
+            (true, 1, "".into(), s(&["x"])),
+            (true, 2, "pkg.m".into(), s(&["one", "two"])),
+            (true, 1, "n".into(), s(&["*"])),
+            (true, 0, "m".into(), s(&["a"])),
+            (false, 0, "z".into(), vec![]),
+        ]);
+    }
+
+    #[test]
+    fn relative_imports_submodules_and_package_reexports_resolve_to_the_defining_file() {
+        let dir = project("pkg", &[
+            ("minisql/__init__.py", "from .engine import Connection\n"),
+            ("minisql/errors.py", "class Error(Exception): pass\n"),
+            ("minisql/sql/__init__.py", "from .parser import parse\nfrom .nodes import Select\n"),
+            ("minisql/sql/nodes.py", "class Select: pass\n"),
+            ("minisql/sql/parser.py", "from . import nodes\nfrom ..errors import Error\ndef parse(): pass\n"),
+            ("minisql/engine/__init__.py", "from .connection import Connection\n"),
+            ("minisql/engine/planner.py", "from minisql.sql import nodes as n\nfrom minisql.sql import Select\n"),
+            ("minisql/engine/executor.py", "from .planner import plan\nfrom minisql.sql import parse\n"),
+            ("minisql/engine/connection.py", "from minisql import errors\nfrom .executor import run\n"),
+        ]);
+        let graph = python_imports(&dir);
+        assert_eq!(deps(&graph, "minisql/sql/parser.py"), vec!["minisql/errors.py", "minisql/sql/nodes.py"]);
+        assert_eq!(deps(&graph, "minisql/engine/planner.py"), vec!["minisql/sql/nodes.py"], "a submodule and a name the package re-exports");
+        assert_eq!(deps(&graph, "minisql/engine/executor.py"), vec!["minisql/engine/planner.py", "minisql/sql/parser.py"]);
+        assert_eq!(deps(&graph, "minisql/engine/connection.py"), vec!["minisql/engine/executor.py", "minisql/errors.py"]);
+        assert_eq!(deps(&graph, "minisql/__init__.py"), vec!["minisql/engine/connection.py"], "re-exports follow a package of packages");
+        // Analyzed from inside the package, absolute imports still resolve.
+        let inner = python_imports(&dir.join("minisql"));
+        assert_eq!(deps(&inner, "engine/executor.py"), vec!["engine/planner.py", "sql/parser.py"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_src_layout_resolves_without_the_src_prefix() {
+        let dir = project("src", &[
+            ("src/app/__init__.py", ""),
+            ("src/app/models.py", "class User: pass\n"),
+            ("src/app/views.py", "from app.models import User\n"),
+            ("tests/test_views.py", "import app.views\n"),
+        ]);
+        let graph = python_imports(&dir);
+        assert_eq!(deps(&graph, "src/app/views.py"), vec!["src/app/models.py"]);
+        assert_eq!(deps(&graph, "tests/test_views.py"), vec!["src/app/views.py"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

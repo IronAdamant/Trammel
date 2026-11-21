@@ -87,7 +87,7 @@ fn dispatch(name: &str, args: &Value, root: &Path, store: Option<&mut Store>, st
             if !store.unwrap().update_plan_status(id, &status) { return Err(Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids")); }
             Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("status", Value::string(status))]))
         }
-        "complete_plan" => complete(args, store.unwrap()),
+        "complete_plan" => complete(args, root, store_path, store.unwrap()),
         "record_steps" => {
             let steps = crate::canon::get(args, "steps").and_then(crate::canon::as_array).ok_or_else(|| missing("steps", "an array of {step_id, status}"))?;
             let (n, unknown) = store.unwrap().record_steps(steps);
@@ -266,13 +266,30 @@ fn plan_tool(name: &str, args: &Value, root: &Path, store: Option<&mut Store>) -
     let forced = crate::canon::get(args, "strategy").and_then(crate::canon::as_str).map(|s| s.to_string());
     let mut stored = full;
     if let Some(name) = forced { crate::canon::insert(&mut stored, "strategy_name", Value::string(name)); }
-    let id = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?.create_plan(&goal, &stored);
-    Ok(crate::canon::obj(vec![
-        ("strategy", strategy),
-        ("plan_id", Value::Int(id)),
-        ("persisted", Value::Bool(true)),
-        ("workflow", Value::string("start_plan")),
-    ]))
+    let store = store.ok_or_else(|| Failure::new("store", "store is not open", "Check that the store directory is writable"))?;
+    let id = store.create_plan(&goal, &stored);
+    let rows = store.get_plan(id).and_then(|p| crate::canon::get(&p, "steps").and_then(crate::canon::as_array).map(|a| a.to_vec())).unwrap_or_default();
+    let mut strategy = strategy;
+    let mut reply = vec![("plan_id", Value::Int(id)), ("persisted", Value::Bool(true)), ("workflow", Value::string("start_plan"))];
+    // Each step's `id` (what verify_step, add_note and claim_step take), so
+    // no get_plan is needed. Without steps in the reply (summary_only) they
+    // come as a short list.
+    match crate::canon::get_mut(&mut strategy, "steps") {
+        Some(Value::Array(steps)) => {
+            for step in steps.iter_mut() {
+                let index = crate::canon::get(step, "step_index").and_then(crate::canon::as_i64);
+                if let Some(row) = rows.iter().find(|r| crate::canon::get(r, "step_index").and_then(crate::canon::as_i64) == index) {
+                    if let Some(sid) = crate::canon::get(row, "id").cloned() { crate::canon::insert(step, "id", sid); }
+                }
+            }
+        }
+        _ => reply.push(("steps", Value::Array(rows.iter().map(|r| pick(r, &["id", "step_index", "file", "action", "description"])).collect()))),
+    }
+    if let Some(first) = crate::store::next_unverified(&rows).and_then(|r| crate::canon::get(r, "id")).and_then(crate::canon::as_i64) {
+        reply.push(("next", Value::string(format!("Work on step {first}, then verify_step with plan_id {id} and step_id {first}: a pass marks the step passed. Finish with complete_plan (verify: true runs the tests first)"))));
+    }
+    reply.insert(0, ("strategy", strategy));
+    Ok(crate::canon::obj(reply))
 }
 
 fn wants_full(args: &Value) -> bool {
@@ -295,7 +312,7 @@ fn compact_meta(meta: Option<&Value>) -> Value {
 /// dependencies and relevance.
 fn compact_strategy(full: &Value) -> Value {
     let steps: Vec<Value> = crate::canon::get(full, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
-        .map(|s| pick(s, &["step_index", "file", "role", "description", "depends_on", "relevance"]))
+        .map(|s| pick(s, &["step_index", "file", "role", "action", "description", "depends_on", "relevance"]))
         .collect();
     let mut out = pick(full, &["goal", "goal_fingerprint"]);
     crate::canon::insert(&mut out, "steps", Value::Array(steps));
@@ -312,7 +329,7 @@ fn compact_strategy(full: &Value) -> Value {
 fn compact_plan(plan: &Value) -> Value {
     let mut out = pick(plan, &["id", "goal", "status", "current_step", "total_steps", "created", "updated"]);
     let steps: Vec<Value> = crate::canon::get(plan, "steps").and_then(crate::canon::as_array).unwrap_or(&[]).iter()
-        .map(|s| pick(s, &["id", "step_index", "file", "role", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at", "verification"]))
+        .map(|s| pick(s, &["id", "step_index", "file", "role", "action", "description", "status", "depends_on", "relevance", "claimed_by", "claimed_at", "verification"]))
         .collect();
     crate::canon::insert(&mut out, "steps", Value::Array(steps));
     crate::canon::insert(&mut out, "notes", crate::canon::get(plan, "notes").cloned().unwrap_or(Value::Array(vec![])));
@@ -357,15 +374,43 @@ fn lean_plan(mut plan: Value) -> Value {
     plan
 }
 
-fn complete(args: &Value, store: &mut Store) -> Result<Value, Failure> {
+/// Close a plan. With `verify: true` the tests run first (as verify_step on
+/// the working tree, or on `ref`), and a failure leaves the plan open. `note`
+/// is added as a handoff note. One call instead of verify_step, add_note and
+/// complete_plan.
+fn complete(args: &Value, root: &Path, store_path: &Path, store: &mut Store) -> Result<Value, Failure> {
     let id = required_i64(args, "plan_id")?;
     let outcome = crate::canon::get(args, "outcome").and_then(crate::canon::as_bool).unwrap_or(true);
     let plan = store.get_plan(id).ok_or_else(|| Failure::new("plan_not_found", format!("plan {id} was not found"), "Call list_plans for valid plan ids"))?;
+    let verify = crate::canon::get(args, "verify").and_then(crate::canon::as_bool).unwrap_or(false);
+    let mut verified = None;
+    if verify && outcome {
+        // Only the verify arguments: plan_id without step_id is not a link.
+        let keys = ["project_root", "test_cmd", "language", "timeout_s", "ref", "full_output", "rerun"];
+        let mut one = Value::Object(keys.iter().filter_map(|k| crate::canon::get(args, k).map(|v| (k.to_string(), v.clone()))).collect());
+        crate::canon::insert(&mut one, "background", Value::Bool(false));
+        let reply = verify_step(&one, root, store_path, Some(&mut *store))?;
+        if crate::canon::get(&reply, "success").and_then(crate::canon::as_bool) != Some(true) {
+            return Ok(crate::canon::obj(vec![
+                ("plan_id", Value::Int(id)),
+                ("completed", Value::Bool(false)),
+                ("verify", reply),
+                ("hint", Value::string("The tests failed, so the plan is still open and no note was added. Fix the failure and call complete_plan with verify: true again")),
+            ]));
+        }
+        verified = Some(pick(&reply, &["success", "source", "commit", "ref", "elapsed_s", "cached", "left_behind"]));
+    }
+    let note = crate::canon::get(args, "note").and_then(crate::canon::as_str).filter(|t| !t.trim().is_empty()).map(|text| {
+        store.add_note(id, text, crate::canon::get(args, "agent_id").and_then(crate::canon::as_str), None)
+    });
     let goal = crate::canon::get(&plan, "goal").and_then(crate::canon::as_str).unwrap_or("").to_string();
     let strategy = crate::canon::get(&plan, "strategy").cloned().unwrap_or(Value::Object(vec![]));
     let sig = store.save_recipe(&goal, &strategy, outcome);
     store.update_plan_status(id, if outcome { "completed" } else { "failed" });
-    Ok(crate::canon::obj(vec![("plan_id", Value::Int(id)), ("recipe", Value::string(sig)), ("outcome", Value::Bool(outcome))]))
+    let mut out = crate::canon::obj(vec![("plan_id", Value::Int(id)), ("completed", Value::Bool(true)), ("recipe", Value::string(sig)), ("outcome", Value::Bool(outcome))]);
+    if let Some(v) = verified { crate::canon::insert(&mut out, "verify", v); }
+    if let Some(n) = note { crate::canon::insert(&mut out, "note_id", Value::Int(n)); }
+    Ok(out)
 }
 
 /// The verify time limit: `timeout_s`, else `verify_timeout_s` from the
@@ -427,11 +472,37 @@ fn verify_step(args: &Value, fallback: &Path, store_path: &Path, held: Option<&m
         }
     };
     let (timeout, note) = verify_timeout(args, &root, background);
+    let rerun = crate::canon::get(args, "rerun").and_then(crate::canon::as_bool).unwrap_or(false);
     let mut request = VerifyRequest { edits, full_output: full, git_ref, ..VerifyRequest::new(root, test_cmd, timeout) };
+    // The same command passed on these same files before: answer with that
+    // run (see `verifycache`). A bad ref is left for `prepare` to report.
+    let probe = if request.test_cmd.is_empty() || !harness::preflight_ok(&request.edits) { None } else {
+        let commit = match &request.git_ref {
+            Some(name) => crate::gitref::resolve(&request.root, name).ok(),
+            None => None,
+        };
+        if request.git_ref.is_some() && commit.is_none() { None } else { crate::verifycache::probe(&request.root, &request.test_cmd, &request.edits, full, commit.as_deref()) }
+    };
+    let cached = if rerun { None } else { probe.as_ref().and_then(|p| crate::verifycache::lookup(p, &request.root)) };
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if background {
         if !crate::jobs::has_room() { return Err(too_many_jobs(format!("{} verify jobs are already running", crate::jobs::MAX_RUNNING))); }
         request.cancel = Some(std::sync::Arc::clone(&cancel));
+    }
+    if let Some(mut verdict) = cached {
+        // A background call still gets a job, finished at once.
+        let mut reply = if background {
+            let store_path = store_path.to_path_buf();
+            crate::jobs::start(timeout.as_secs(), cancel, move || {
+                if let Some((plan, step)) = link { record_on_step(None, &store_path, plan, step, &mut verdict, &request); }
+                verdict
+            }).map_err(too_many_jobs)?
+        } else {
+            if let Some((plan, step)) = link { record_on_step(held, store_path, plan, step, &mut verdict, &request); }
+            verdict
+        };
+        if let Some(note) = note { crate::canon::insert(&mut reply, "timeout_note", Value::string(note)); }
+        return Ok(reply);
     }
     // The copy is made here, also for a background run, so a bad ref or a
     // copy too deep for Windows is an error now rather than a job result.
@@ -440,11 +511,13 @@ fn verify_step(args: &Value, fallback: &Path, store_path: &Path, held: Option<&m
         let store_path = store_path.to_path_buf();
         crate::jobs::start(timeout.as_secs(), cancel, move || {
             let mut verdict = harness::finish(stage, &request);
+            if let Some(probe) = &probe { crate::verifycache::remember(probe, &verdict); }
             if let Some((plan, step)) = link { record_on_step(None, &store_path, plan, step, &mut verdict, &request); }
             verdict
         }).map_err(too_many_jobs)?
     } else {
         let mut verdict = harness::finish(stage, &request);
+        if let Some(probe) = &probe { crate::verifycache::remember(probe, &verdict); }
         if let Some((plan, step)) = link { record_on_step(held, store_path, plan, step, &mut verdict, &request); }
         verdict
     };
@@ -492,6 +565,7 @@ fn verification_record(reply: &Value, request: &VerifyRequest) -> Value {
     if let Some(name) = &request.git_ref { crate::canon::insert(&mut out, "ref", Value::string(name.clone())); }
     if let Some(elapsed) = crate::canon::get(reply, "elapsed_s") { crate::canon::insert(&mut out, "elapsed_s", elapsed.clone()); }
     if !passed { crate::canon::insert(&mut out, "excerpt", Value::string(failure_excerpt(reply))); }
+    if crate::canon::get(reply, "cached").is_some() { crate::canon::insert(&mut out, "cached", Value::Bool(true)); }
     out
 }
 
@@ -518,8 +592,9 @@ fn failure_excerpt(reply: &Value) -> String {
     crate::testfail::summary(&format!("{}\n{}", text("output"), text("trace")), STEP_EXCERPT)
 }
 
-/// Store the run on the plan step and say so in the reply (`recorded`), or
-/// say why it could not be stored (`record_error`).
+/// Store the run on the plan step and say so in the reply (`recorded`, with
+/// the step's status: a pass marks it passed), or say why it could not be
+/// stored (`record_error`).
 fn record_on_step(held: Option<&mut Store>, store_path: &Path, plan: i64, step: i64, reply: &mut Value, request: &VerifyRequest) {
     let record = verification_record(reply, request);
     let stored = match held {
@@ -530,8 +605,8 @@ fn record_on_step(held: Option<&mut Store>, store_path: &Path, plan: i64, step: 
         }),
     };
     match stored {
-        Ok(true) => crate::canon::insert(reply, "recorded", crate::canon::obj(vec![("plan_id", Value::Int(plan)), ("step_id", Value::Int(step))])),
-        Ok(false) => crate::canon::insert(reply, "record_error", Value::string(format!("step {step} of plan {plan} is gone; the outcome was not stored"))),
+        Ok(Some(status)) => crate::canon::insert(reply, "recorded", crate::canon::obj(vec![("plan_id", Value::Int(plan)), ("step_id", Value::Int(step)), ("status", Value::string(status))])),
+        Ok(None) => crate::canon::insert(reply, "record_error", Value::string(format!("step {step} of plan {plan} is gone; the outcome was not stored"))),
         Err(err) => crate::canon::insert(reply, "record_error", Value::string(format!("the outcome was not stored: {err}"))),
     }
 }
@@ -727,6 +802,10 @@ mod tests {
         assert!(crate::canon::get(&plan, "strategy").and_then(|s| crate::canon::get(s, "steps")).is_none());
         let second = &crate::canon::get(&plan, "steps").and_then(crate::canon::as_array).unwrap()[1];
         assert_eq!(crate::canon::stable(crate::canon::get(second, "depends_on").unwrap()), "[0]");
+        // A summary reply still lists each step's id and description.
+        let listed = crate::canon::get(&reply, "steps").and_then(crate::canon::as_array).unwrap();
+        assert_eq!(crate::canon::get(&listed[1], "id"), crate::canon::get(second, "id"));
+        assert!(crate::canon::get(&listed[1], "description").and_then(crate::canon::as_str).is_some());
         // complete_plan still saves the full strategy as the recipe.
         let id = crate::canon::get(&plan, "id").cloned().unwrap();
         call("complete_plan", &crate::canon::obj(vec![("project_root", Value::string(dir.display().to_string())), ("plan_id", id)]), &dir, Some(&store), false).unwrap();

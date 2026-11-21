@@ -145,7 +145,6 @@ pub fn analyze(root: &Path, language: &str) -> Analysis {
 /// merged by path, so the maps match a serial walk.
 fn python_project(root: &Path) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, Vec<(String, String)>>, BTreeMap<String, Vec<String>>) {
     let files = collect_files(root, &[".py"]);
-    let (modules, module_set) = imports::python_module_index(&files);
     // Largest sources first so one heavy module cannot sit behind another
     // on the same worker. Merge is by path, so this does not change output.
     let mut loaded: Vec<(usize, String, String)> = files.iter().filter_map(|rel| {
@@ -153,6 +152,8 @@ fn python_project(root: &Path) -> (BTreeMap<String, Vec<String>>, BTreeMap<Strin
         Some((source.len(), rel.clone(), source))
     }).collect();
     loaded.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let sources: BTreeMap<&str, &str> = loaded.iter().map(|(_, rel, source)| (rel.as_str(), source.as_str())).collect();
+    let py = imports::PyIndex::build(root, &files, |rel| sources.get(rel).map(|s| s.to_string()));
     let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, loaded.len().max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut parts: Vec<Vec<(String, Vec<(String, &'static str)>, BTreeSet<String>)>> = Vec::new();
@@ -160,8 +161,7 @@ fn python_project(root: &Path) -> (BTreeMap<String, Vec<String>>, BTreeMap<Strin
         let mut joins = Vec::with_capacity(workers);
         for _ in 0..workers {
             let loaded = &loaded;
-            let modules = &modules;
-            let module_set = &module_set;
+            let py = &py;
             let next = &next;
             joins.push(scope.spawn(move || {
                 let mut local = Vec::new();
@@ -170,7 +170,7 @@ fn python_project(root: &Path) -> (BTreeMap<String, Vec<String>>, BTreeMap<Strin
                     if index >= loaded.len() { break; }
                     let (_, rel, source) = &loaded[index];
                     let names = python_names(&extract(source));
-                    let deps = imports::python_file_deps(source, rel, module_set, modules);
+                    let deps = imports::python_file_deps(source, rel, py);
                     if names.is_empty() && deps.is_empty() { continue; }
                     local.push((rel.clone(), names, deps));
                 }

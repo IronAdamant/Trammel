@@ -248,7 +248,10 @@ fn unknown_names_and_core_stop_the_server_with_exit_2() {
 /// job_status and cancel_job tools, the files, timeout_s and background
 /// arguments, and descriptions that say when a plan helps; 4.5.0 the ref,
 /// plan_id and step_id arguments of verify_step and the descriptions and
-/// instructions for them (left_behind, copy depth, next_step). Any other
+/// instructions for them (left_behind, copy depth, next_step); after 4.5.1
+/// complete_plan's verify, note, test_cmd and ref, verify_step's rerun, and
+/// the descriptions and instructions for create steps, step ids from
+/// start_plan, passing steps marked passed and cached passes. Any other
 /// difference fails, so the default surface only changes deliberately.
 #[test]
 fn default_output_matches_the_recorded_golden() {

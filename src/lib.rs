@@ -32,6 +32,7 @@ pub mod jobs;
 pub mod gitref;
 pub mod pathlen;
 pub mod testfail;
+pub mod verifycache;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SCHEMA_VERSION: &str = "4.0.0";

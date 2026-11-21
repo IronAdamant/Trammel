@@ -34,4 +34,12 @@ Since 4.5.0 a `verify_step` result that ran the tests also has:
 - `failed_tests` on a failure the output shows: up to 8 `{name, excerpt}`, each excerpt at most 400 characters; `failed_tests_more` for the rest.
 - `recorded: {plan_id, step_id}` when the call passed both (or `record_error`). The step then has `verification`: `passed`, `command`, `source`, `commit` and `ref` for a commit, `at` (Unix seconds), `elapsed_s`, and `excerpt` (at most 300 characters) for a failure. `get_plan`, `resume` and `export_plan` show it. `resume` adds `next_step` (the first step with no passing verification that is not passed or skipped, or null) and `next`.
 
+After 4.5.1:
+
+- `start_plan` steps carry their `id` (the `step_id` other tools take). With `summary_only` the reply has `steps: [{id, step_index, file, action?, description}]`. `next` names the first step.
+- A step for a file that does not exist yet has `role: "create"` and `action: "create"`; `analysis_meta.new_files` lists them, and `plan_source` is `named_files`.
+- `recorded` is `{plan_id, step_id, status}`. A pass sets a pending, running or failed step to `passed`; a failure sets a passed step to `failed`; `skipped` and `completed` stay. The plan's `current_step` follows the first step not done, and a `pending` plan becomes `running`.
+- `cached: {at, note}` on a `verify_step` reply that was not run again (see SYSTEM_PROMPT.md, "Cached passes"); the step's `verification` then has `cached: true`. `rerun: true` always runs.
+- `complete_plan` takes `verify`, `note`, `test_cmd`, `ref` (and `timeout_s`, `language`, `full_output`, `rerun` as verify_step). The reply adds `completed: true`, `verify` (`success`, `source`, `commit`, `ref`, `elapsed_s`, `cached`, `left_behind`) and `note_id`. A failed verify returns `{plan_id, completed: false, verify: <the verify_step reply>, hint}` and changes nothing.
+
 Argument schemas are served by `tools/list` (`src/catalogue.rs`). The result envelope files live in `schemas/`.
